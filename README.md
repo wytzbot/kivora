@@ -213,3 +213,6 @@ Google Cloud Translation API is only needed if Kivora itself wants to translate 
 The Kivora FYP now uses YouTube's `nextPageToken` pagination. The initial discovery page loads normally, then an intersection observer requests the next page automatically as the viewer approaches the bottom of the feed. Each discovery query keeps its own YouTube page token so pagination remains valid for multi-query categories. Results are de-duplicated before being appended. The feed continues until YouTube has no further page token or the API/quota prevents additional discovery.
 
 This is an effectively endless feed from the user's perspective, not an unlimited YouTube API entitlement. YouTube Data API quota still applies, and Kivora should keep server-side caching/rate limits enabled in production.
+
+## Google sign-in recovery
+Google authentication now signs directly into the selected Google account instead of attempting to link the account picker result to Kivora's anonymous watch-first session. This avoids `auth/credential-already-in-use` when the Gmail address already has a Kivora account. Existing redirect flows also recover by authenticating the existing Google account.

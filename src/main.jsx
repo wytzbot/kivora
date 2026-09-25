@@ -52,6 +52,15 @@ async function fetchKivoraVideos(query="", category="all", pageTokens=[]){
  return {items,source:data?.source||"youtube",nextPageTokens:Array.isArray(data?.nextPageTokens)?data.nextPageTokens:[]};
 }
 
+async function fetchKivoraVideoById(videoId){
+ const id=String(videoId||"").trim();
+ if(!id) return null;
+ const res=await fetch(`/api/youtube-search?videoId=${encodeURIComponent(id)}`,{headers:{accept:"application/json"}});
+ let data={}; try{data=await res.json()}catch{}
+ if(!res.ok) throw new Error(data?.error||`Video lookup failed (${res.status})`);
+ return Array.isArray(data?.items)&&data.items[0]?normalizeVideo(data.items[0]):null;
+}
+
 async function rateVideo(videoId,uid,value){
  if(!uid) throw new Error("A Google account is required to rate originality.");
  const rating=Math.trunc(Number(value));
@@ -77,13 +86,22 @@ async function rateVideo(videoId,uid,value){
 }
 
 function App(){
- const [tab,setTab]=useState("home"),[premium,setPremium]=useState(false),[menu,setMenu]=useState(false);
+ const initialWatchId=useRef(new URLSearchParams(window.location.search).get("watch")||"");
+ const [tab,setTab]=useState(()=>initialWatchId.current?"watch":"home"),[premium,setPremium]=useState(false),[menu,setMenu]=useState(false);
  const [user,setUser]=useState(auth.currentUser),[busy,setBusy]=useState(false),[notice,setNotice]=useState("");
  const [notifyPrompt,setNotifyPrompt]=useState(true);
  const [pendingNewVideos,setPendingNewVideos]=useState(0),[ratings,setRatings]=useState({}),[query,setQuery]=useState(""),[category,setCategory]=useState("all"),[videos,setVideos]=useState(EMPTY_VIDEOS),[pageTokens,setPageTokens]=useState([]),[hasMore,setHasMore]=useState(true),[loadingMore,setLoadingMore]=useState(false),[sponsored,setSponsored]=useState([]),[videoLoading,setVideoLoading]=useState(true),[videoError,setVideoError]=useState(""),[theme,setTheme]=useState(()=>localStorage.getItem("kivora-theme")||"system"),[installPrompt,setInstallPrompt]=useState(null),[selectedVideo,setSelectedVideo]=useState(null);
  const feedSentinelRef=useRef(null);
  const signedIn=!!user&&!user.isAnonymous;
  const owner=isKivoraOwner(user);
+ useEffect(()=>{
+   const id=initialWatchId.current;
+   if(!id) return;
+   let live=true;
+   fetchKivoraVideoById(id).then(v=>{if(live&&v){setSelectedVideo(v);setTab("watch");}}).catch(e=>{if(live)setNotice(e?.message||"This video could not be loaded.")});
+   return()=>{live=false};
+ },[]);
+
  useEffect(()=>{
    const apply=()=>{const dark=theme==="dark"||(theme==="system"&&window.matchMedia?.("(prefers-color-scheme: dark)").matches);document.documentElement.dataset.theme=dark?"dark":"light";document.documentElement.style.colorScheme=dark?"dark":"light";};
    apply(); localStorage.setItem("kivora-theme",theme);
@@ -188,22 +206,59 @@ function App(){
    setSelectedVideo(video);
    setTab("watch");
    setMenu(false);
-   window.history.pushState({kivora:true,tab:"watch",videoId:video.id},"",`#watch-${encodeURIComponent(video.id)}`);
+   window.history.pushState({kivora:true,tab:"watch",videoId:video.id},"",`?watch=${encodeURIComponent(video.id)}`);
    window.scrollTo({top:0,behavior:"auto"});
  };
+
  useEffect(()=>{
-   const onPop=()=>{
+   const base=window.location.origin;
+   const canonical=tab==="watch"&&selectedVideo?`${base}/?watch=${encodeURIComponent(selectedVideo.id)}`:`${base}/`;
+   const title=tab==="watch"&&selectedVideo?`${selectedVideo.title} | Kivora`:category!=="all"?`${category[0].toUpperCase()+category.slice(1)} Action Movies | Kivora`:"Kivora | Action Movies & Long-Form Entertainment";
+   const description=tab==="watch"&&selectedVideo?`Watch ${selectedVideo.title} on Kivora through the official YouTube player. Discover more long-form action movies and related videos.`:"Kivora is an action-movie discovery platform for long-form entertainment, with Hollywood, Chinese, Korean, Japanese, Nollywood and other action-movie categories.";
+   document.title=title;
+   const setMeta=(selector,attrs,content)=>{let el=document.head.querySelector(selector);if(!el){el=document.createElement("meta");Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,v));document.head.appendChild(el);}el.setAttribute("content",content)};
+   setMeta('meta[name="description"]',{name:"description"},description);
+   setMeta('meta[property="og:title"]',{property:"og:title"},title);
+   setMeta('meta[property="og:description"]',{property:"og:description"},description);
+   setMeta('meta[property="og:type"]',{property:"og:type"},tab==="watch"?"video.other":"website");
+   setMeta('meta[property="og:url"]',{property:"og:url"},canonical);
+   setMeta('meta[property="og:site_name"]',{property:"og:site_name"},"Kivora");
+   if(tab==="watch"&&selectedVideo?.thumb)setMeta('meta[property="og:image"]',{property:"og:image"},selectedVideo.thumb);
+   setMeta('meta[name="twitter:card"]',{name:"twitter:card"},"summary_large_image");
+   setMeta('meta[name="twitter:title"]',{name:"twitter:title"},title);
+   setMeta('meta[name="twitter:description"]',{name:"twitter:description"},description);
+   let link=document.head.querySelector('link[rel="canonical"]');if(!link){link=document.createElement("link");link.rel="canonical";document.head.appendChild(link)}link.href=canonical;
+   let schema=document.getElementById("kivora-seo-schema");if(!schema){schema=document.createElement("script");schema.id="kivora-seo-schema";schema.type="application/ld+json";document.head.appendChild(schema)}
+   const baseGraph=[
+    {"@type":"WebSite","@id":`${base}/#website`,url:base+"/",name:"Kivora",description:"Action-movie and long-form entertainment discovery platform."},
+    {"@type":"Organization","@id":`${base}/#organization`,name:"Kivora",url:base+"/"}
+   ];
+   if(tab==="watch"&&selectedVideo){
+     const seconds=Math.max(0,Number(selectedVideo.durationSeconds||0));
+     const iso=seconds?`PT${Math.floor(seconds/3600)}H${Math.floor((seconds%3600)/60)}M${seconds%60}S`:undefined;
+     baseGraph.push({"@type":"VideoObject",name:selectedVideo.title,description:selectedVideo.desc||description,thumbnailUrl:[selectedVideo.thumb],uploadDate:selectedVideo.publishedAt||undefined,duration:iso,embedUrl:`https://www.youtube-nocookie.com/embed/${selectedVideo.id}`,creator:selectedVideo.channelTitle?{"@type":"Organization",name:selectedVideo.channelTitle}:undefined,interactionStatistic:{"@type":"InteractionCounter",interactionType:{"@type":"WatchAction"},userInteractionCount:Number(selectedVideo.viewCount||0)}});
+   }
+   schema.textContent=JSON.stringify({"@context":"https://schema.org", "@graph":baseGraph});
+ },[tab,selectedVideo,category]);
+ useEffect(()=>{
+   const onPop=async()=>{
+     const params=new URLSearchParams(window.location.search);
+     const watchId=params.get("watch");
      const state=window.history.state||{};
-     if(state?.kivora && state.tab==="watch"){
-       const found=videos.find(v=>v.id===state.videoId);
+     if(watchId){
+       const found=videos.find(v=>v.id===watchId);
        if(found){setSelectedVideo(found);setTab("watch");return;}
+       try{const fetched=await fetchKivoraVideoById(watchId); if(fetched){setSelectedVideo(fetched);setTab("watch");return;}}catch{}
      }
      setSelectedVideo(null);
      setTab(state?.kivora?.tab || (state?.tab && ["home","watchlist","history","account","premium","ads","faqs","about","privacy","terms","disclaimer","creators","help"].includes(state.tab)) ? state.tab : "home");
      window.scrollTo({top:0,behavior:"auto"});
    };
    const current=window.history.state;
-   if(!current?.kivora) window.history.replaceState({kivora:true,tab:tab},"",window.location.hash||"#home");
+   if(!current?.kivora){
+     const watchId=new URLSearchParams(window.location.search).get("watch");
+     window.history.replaceState({kivora:true,tab:watchId?"watch":"home",videoId:watchId||undefined},"",watchId?`?watch=${encodeURIComponent(watchId)}`:(window.location.hash||"#home"));
+   }
    window.addEventListener("popstate",onPop);
    return()=>window.removeEventListener("popstate",onPop);
  },[videos,tab]);
@@ -411,7 +466,7 @@ function VideoCard({video,user,onNotice,isPro=false,suggested=false,onOpen}){
  useEffect(()=>{if(!user)return;const key=`kivora-like-${video.id}-${user.uid}`;setLiked(localStorage.getItem(key)==="1");},[user,video.id]);
  async function like(e){e.stopPropagation();const uid=user?.uid||"guest";try{const next=user?await toggleLike(video.id,user.uid):(localStorage.getItem(`kivora-like-${video.id}-guest`)!=="1");setLiked(next);localStorage.setItem(`kivora-like-${video.id}-${uid}`,next?"1":"0");setLikes(x=>Math.max(0,x+(next?1:-1)));if(!user)onNotice("Liked on this device. Connect Google to sync your Kivora activity.");}catch(e2){onNotice(e2.message)}}
  async function save(e){e.stopPropagation();const uid=user?.uid||"guest";try{const next=user?await saveVideo(video.id,user.uid):(localStorage.getItem(`kivora-saved-${video.id}-guest`)!=="1");setSaved(next);localStorage.setItem(`kivora-saved-${video.id}-${uid}`,next?"1":"0");if(!user)onNotice("Saved on this device. Connect Google to sync your Kivora activity.");}catch(e2){onNotice(e2.message)}}
- function share(e){e.stopPropagation();const url=`${location.origin}${location.pathname}#video-${video.id}`;if(navigator.share){navigator.share({title:video.title,url}).catch(err=>{if(err?.name!=="AbortError")onNotice("Share was cancelled or unavailable.")});return}if(navigator.clipboard?.writeText){navigator.clipboard.writeText(url).then(()=>onNotice("Kivora link copied.")).catch(()=>onNotice("Copy the page link to share."));return}onNotice("Copy the page link to share.")}
+ function share(e){e.stopPropagation();const url=`${location.origin}/?watch=${encodeURIComponent(video.id)}`;if(navigator.share){navigator.share({title:video.title,url}).catch(err=>{if(err?.name!=="AbortError")onNotice("Share was cancelled or unavailable.")});return}if(navigator.clipboard?.writeText){navigator.clipboard.writeText(url).then(()=>onNotice("Kivora link copied.")).catch(()=>onNotice("Copy the page link to share."));return}onNotice("Copy the page link to share.")}
  return <article className="videoCard feedVideoCard" onClick={()=>onOpen?.(video)} role="link" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();onOpen?.(video)}}}>
    <div className="playerWrap isThumbnail">
     <div className="thumbnailButton" aria-label={`Open ${video.title}`}>
@@ -436,7 +491,7 @@ function VideoWatchPage({video,relatedVideos,sponsored,user,onNotice,isPro,onBac
  useEffect(()=>{if(!user)return;setLiked(localStorage.getItem(`kivora-like-${video.id}-${user.uid}`)==="1");},[user,video.id]);
  async function like(){const uid=user?.uid||"guest";try{const next=user?await toggleLike(video.id,user.uid):(localStorage.getItem(`kivora-like-${video.id}-guest`)!=="1");setLiked(next);localStorage.setItem(`kivora-like-${video.id}-${uid}`,next?"1":"0");setLikes(x=>Math.max(0,x+(next?1:-1)));if(!user)onNotice("Liked on this device. Connect Google to sync your Kivora activity.");}catch(e){onNotice(e.message)}}
  async function save(){const uid=user?.uid||"guest";try{const next=user?await saveVideo(video.id,user.uid):(localStorage.getItem(`kivora-saved-${video.id}-guest`)!=="1");setSaved(next);localStorage.setItem(`kivora-saved-${video.id}-${uid}`,next?"1":"0");if(!user)onNotice("Saved on this device. Connect Google to sync your Kivora activity.");}catch(e){onNotice(e.message)}}
- async function share(){const url=`${location.origin}${location.pathname}#video-${video.id}`;try{if(navigator.share){await navigator.share({title:video.title,url});return}if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(url);onNotice("Kivora link copied.");return}throw new Error()}catch(e){if(e?.name!=="AbortError")onNotice("Copy the page link to share.")}}
+ async function share(){const url=`${location.origin}/?watch=${encodeURIComponent(video.id)}`;try{if(navigator.share){await navigator.share({title:video.title,url});return}if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(url);onNotice("Kivora link copied.");return}throw new Error()}catch(e){if(e?.name!=="AbortError")onNotice("Copy the page link to share.")}}
  return <section className="watchPage">
    <div className="watchTop"><button className="backBtn" onClick={onBack}>← Back to FYP</button><span className="watchSource">Kivora · YouTube</span></div>
    <YouTubePlayer video={video} isPro={isPro} onNotice={onNotice}/>
@@ -602,6 +657,6 @@ function Legal({page}){
  }[page];
  return <section className="panel legal"><small>KIVORA INFORMATION</small><h1>{content[0]}</h1><p>{content[1]}</p><p>{content[2]}</p><div className="noticeBox"><b>Source principle</b><p>Kivora's role is discovery and presentation—not ownership of third-party audiovisual works.</p></div></section>
 }
-function authMessage(e){return e?.code==="auth/account-exists-with-different-credential"?"That Google account is already linked to another sign-in method.":e?.message||"Sign-in could not be completed."}
+function authMessage(e){const c=e?.code; if(c==="auth/credential-already-in-use"||c==="auth/account-exists-with-different-credential") return "This Google account already has a Kivora account. Signing you into that existing account instead."; if(c==="auth/popup-blocked") return "Google sign-in was blocked by the browser. Kivora will use the secure redirect sign-in instead."; return e?.message||"Sign-in could not be completed."}
 
 createRoot(document.getElementById("root")).render(<App/>);

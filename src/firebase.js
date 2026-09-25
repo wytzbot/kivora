@@ -30,6 +30,15 @@ if(typeof window!=="undefined") isSupported().then(ok=>ok&&getAnalytics(app)).ca
 export async function finishGoogleRedirect(){
   try { return await getRedirectResult(auth); } catch(e) {
     if(e?.code === "auth/popup-closed-by-user") return null;
+    // A redirect that started by linking an anonymous account can finish with
+    // credential-already-in-use when the selected Google account already has
+    // a real Kivora account. In that case, authenticate that existing account
+    // instead of surfacing a dead-end Firebase error.
+    if(["auth/credential-already-in-use","auth/account-exists-with-different-credential"].includes(e?.code)){
+      try {
+        return await signInWithRedirect(auth,googleProvider);
+      } catch(inner){ throw inner; }
+    }
     throw e;
   }
 }
@@ -38,18 +47,20 @@ export async function startAnonymousSession(){
   return (await signInAnonymously(auth)).user;
 }
 export async function signInWithGoogle(){
-  if(auth.currentUser?.isAnonymous){
-    try { return (await linkWithPopup(auth.currentUser,googleProvider)).user; }
-    catch(e){
-      if(["auth/popup-blocked","auth/operation-not-supported-in-this-environment","auth/cancelled-popup-request"].includes(e?.code)){
-        await linkWithRedirect(auth.currentUser,googleProvider); return null;
-      }
-      throw e;
-    }
-  }
+  // Do not link an anonymous Firebase user to Google here. If that Google
+  // account already exists, Firebase can return auth/credential-already-in-use
+  // after the account picker, which looks like a failed login to the user.
+  // Signing in directly lets Firebase switch the session to the existing
+  // Google account cleanly. Anonymous watch-first access remains available
+  // before login.
   try { return (await signInWithPopup(auth,googleProvider)).user; }
   catch(e){
     if(["auth/popup-blocked","auth/operation-not-supported-in-this-environment","auth/cancelled-popup-request"].includes(e?.code)){
+      await signInWithRedirect(auth,googleProvider); return null;
+    }
+    // If an older/previous linking flow is still encountered, recover by
+    // authenticating the existing Google account rather than failing.
+    if(["auth/credential-already-in-use","auth/account-exists-with-different-credential"].includes(e?.code)){
       await signInWithRedirect(auth,googleProvider); return null;
     }
     throw e;

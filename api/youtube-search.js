@@ -81,8 +81,34 @@ export default async function handler(req, res) {
 
   const rawQ = Array.isArray(req.query?.q) ? req.query.q[0] : req.query?.q;
   const rawCategory = Array.isArray(req.query?.category) ? req.query.category[0] : req.query?.category;
+  const rawVideoId = Array.isArray(req.query?.videoId) ? req.query.videoId[0] : req.query?.videoId;
+  const videoId = String(rawVideoId || "").trim().match(/^[A-Za-z0-9_-]{6,}$/)?.[0] || "";
   const q = String(rawQ || "").trim().slice(0, 100);
   const category = String(rawCategory || "all").trim().toLowerCase();
+
+  // SEO/watch-page lookup: one videos.list request is far cheaper than a search request.
+  if (videoId) {
+    try {
+      const params = new URLSearchParams({part:"snippet,statistics,contentDetails",id:videoId,key});
+      const response = await fetch(`https://www.googleapis.com/youtube/v3/videos?${params}`);
+      const data = await response.json();
+      if (!response.ok) {
+        const reason = data?.error?.errors?.[0]?.reason;
+        const message = data?.error?.message || "YouTube video lookup failed.";
+        throw new Error(reason ? `${message} (${reason})` : message);
+      }
+      const item = data?.items?.[0];
+      if (!item) return res.status(404).json({error:"Video not found on YouTube."});
+      const durationSeconds = parseDuration(item.contentDetails?.duration || "");
+      return res.status(200).json({
+        source:"youtube-data-api-v3",
+        items:[{id:item.id,snippet:item.snippet,statistics:item.statistics||{},contentDetails:{duration:item.contentDetails?.duration||"",durationSeconds,caption:item.contentDetails?.caption||"false"}}],
+        nextPageTokens:[]
+      });
+    } catch (error) {
+      return res.status(502).json({error:error?.message || "Kivora could not look up this YouTube video."});
+    }
+  }
   const queries = q ? [`${q} action movie full movie -recap -explained -review -reaction -trailer -teaser -shorts`] : industryQueries(category).map(term => /^(all|suggested|new)$/.test(category) ? `${term} -bollywood -hindi -tamil -telugu -malayalam -kannada -punjabi -marathi -bengali` : term);
   // Each YouTube search query has its own pagination cursor. The client sends
   // pageToken0/pageToken1/... so an infinite feed can continue without
