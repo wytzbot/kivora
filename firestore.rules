@@ -1,0 +1,101 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // Billing bypass is enforced by the authenticated server, not by a client-supplied email.
+    // Firestore rules do not grant unrestricted database access to the owner email.
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid)
+        && request.resource.data.keys().hasOnly([
+          'fcmTokens', 'notificationSettings', 'savedVideos', 'updatedAt'
+        ]);
+      allow update: if isOwner(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'fcmTokens', 'notificationSettings', 'savedVideos', 'updatedAt'
+        ]);
+      allow delete: if isOwner(uid);
+    }
+
+    match /videos/{videoId} {
+      allow read: if true;
+      allow create: if signedIn() && request.auth.token.admin == true;
+
+      // Aggregates can only change atomically with the matching one-time
+      // rating/like document. Clients cannot directly rewrite counters.
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'ratingSum', 'ratingCount', 'ratingAverage', 'ratingUpdatedAt', 'likeCount'
+        ])
+        && (
+          (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'ratingSum', 'ratingCount', 'ratingAverage', 'ratingUpdatedAt'
+            ])
+            && !exists(/databases/$(database)/documents/videos/$(videoId)/ratings/$(request.auth.uid))
+            && getAfter(/databases/$(database)/documents/videos/$(videoId)/ratings/$(request.auth.uid)).data.uid == request.auth.uid
+            && getAfter(/databases/$(database)/documents/videos/$(videoId)/ratings/$(request.auth.uid)).data.rating is int
+            && getAfter(/databases/$(database)/documents/videos/$(videoId)/ratings/$(request.auth.uid)).data.rating >= 1
+            && getAfter(/databases/$(database)/documents/videos/$(videoId)/ratings/$(request.auth.uid)).data.rating <= 5
+            && request.resource.data.ratingCount == resource.data.get('ratingCount', 0) + 1
+            && request.resource.data.ratingSum == resource.data.get('ratingSum', 0) + getAfter(/databases/$(database)/documents/videos/$(videoId)/ratings/$(request.auth.uid)).data.rating
+            && request.resource.data.ratingAverage == request.resource.data.ratingSum / request.resource.data.ratingCount
+          )
+          ||
+          (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likeCount'])
+            && (
+              (
+                request.resource.data.likeCount == resource.data.get('likeCount', 0) + 1
+                && getAfter(/databases/$(database)/documents/videos/$(videoId)/likes/$(request.auth.uid)).data.uid == request.auth.uid
+              )
+              ||
+              (
+                request.resource.data.likeCount == resource.data.get('likeCount', 0) - 1
+                && !getAfter(/databases/$(database)/documents/videos/$(videoId)/likes/$(request.auth.uid)).exists()
+              )
+            )
+          )
+        );
+
+      match /ratings/{uid} {
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid)
+          && !exists(/databases/$(database)/documents/videos/$(videoId)/ratings/$(uid))
+          && request.resource.data.keys().hasOnly(['uid', 'rating', 'createdAt'])
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.rating is int
+          && request.resource.data.rating >= 1
+          && request.resource.data.rating <= 5
+          && getAfter(/databases/$(database)/documents/videos/$(videoId)).data.ratingCount == get(/databases/$(database)/documents/videos/$(videoId)).data.get('ratingCount', 0) + 1
+          && getAfter(/databases/$(database)/documents/videos/$(videoId)).data.ratingSum == get(/databases/$(database)/documents/videos/$(videoId)).data.get('ratingSum', 0) + request.resource.data.rating;
+        allow update, delete: if false;
+      }
+
+      match /likes/{uid} {
+        allow read: if true;
+        allow create: if isOwner(uid)
+          && request.resource.data.keys().hasOnly(['uid', 'createdAt'])
+          && request.resource.data.uid == request.auth.uid
+          && !exists(/databases/$(database)/documents/videos/$(videoId)/likes/$(uid))
+          && getAfter(/databases/$(database)/documents/videos/$(videoId)).data.likeCount == get(/databases/$(database)/documents/videos/$(videoId)).data.get('likeCount', 0) + 1;
+        allow delete: if isOwner(uid)
+          && getAfter(/databases/$(database)/documents/videos/$(videoId)).data.likeCount == get(/databases/$(database)/documents/videos/$(videoId)).data.get('likeCount', 0) - 1;
+      }
+    }
+
+    match /campaigns/{id} {
+      allow read: if signedIn() && resource.data.advertiserId == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.advertiserId == request.auth.uid;
+      allow update, delete: if signedIn() && resource.data.advertiserId == request.auth.uid;
+    }
+  }
+}
