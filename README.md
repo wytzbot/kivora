@@ -152,3 +152,34 @@ A follow-up line-by-line pass found and fixed:
 - **Unmounted-component update on Premium checkout:** the demo checkout's `setTimeout` could fire after a user navigated away from the Pro screen. It now checks the component is still mounted before updating state.
 
 The project was statically checked with Node's JavaScript parser for all `.js` modules, plus a manual line-by-line read of every file and a bracket/paren balance check on the JSX. A complete Vite build could not be executed in this environment because npm registry access is blocked here; run `npm install && npm run build` in your own environment before release to catch anything a static read can't (e.g. actual JSX transform errors).
+
+## Live YouTube discovery setup
+
+Kivora now loads live video discovery through the Vercel serverless endpoint `GET /api/youtube-search`, which calls YouTube Data API v3. The browser then plays returned video IDs with the official YouTube IFrame Player API. YouTube's `search.list` supports `type=video` and returns the video ID plus snippet metadata; the embedded player handles playback.
+
+### Required environment variable
+
+Set this on the deployment platform (for example Vercel), not in `src/` and not in a `VITE_` variable:
+
+`YOUTUBE_API_KEY=...`
+
+The API key must have **YouTube Data API v3** enabled. Because the request is made by the serverless function, do not use an HTTP-referrer restriction intended for a browser key. Keep the key restricted to **YouTube Data API v3**; do not expose it in the client bundle. If you use a Vercel serverless backend without a fixed outbound IP, IP-address restriction is generally not practical.
+
+The IFrame Player API does **not** require a separate API key.
+
+The endpoint filters discovery to embeddable/syndicated videos and returns normalized metadata for Kivora. Search requests from the Kivora search box are debounced and sent to the same endpoint.
+
+## Kivora UI refresh
+
+- No promotional hero block on the FYP; the feed starts with a compact discovery header.
+- Larger typography, pill-shaped controls, card-based movie-app styling, light/dark/system themes.
+- Collapsible menu sections for personalization, FAQs, legal pages and YouTube.
+- Legal information is collapsed below the FYP.
+- Videos expose secondary metadata inside an expandable “About this video” section.
+- Native-style actions include installable PWA support where the browser exposes the install prompt, device share, fullscreen playback and direct “Watch on YouTube” links.
+- Approved sponsored campaigns can appear in the FYP with a visible Sponsored label.
+- Banner/image advertising is $1.99 per 1,500 impressions; video advertising is $2.99 per 1,500 impressions.
+
+
+## Action-movie discovery update
+Kivora's FYP is action-movie focused across multiple industries: Suggested, All, New, Hollywood, Bollywood, Chinese, Korean, Japanese, Nollywood, South Indian, Thai, and Indonesian. Discovery queries are action-oriented and the server/client filters exclude recap, explained, summary, review, reaction, trailer/teaser, Shorts, fan-edit and similar non-movie results. YouTube remains the playback source through the official embedded player.

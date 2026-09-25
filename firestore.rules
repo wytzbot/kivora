@@ -93,7 +93,7 @@ service cloud.firestore {
     }
 
     match /campaigns/{id} {
-      allow read: if signedIn() && resource.data.advertiserId == request.auth.uid;
+      allow read: if (signedIn() && resource.data.advertiserId == request.auth.uid) || resource.data.status == "ready";
       allow create: if signedIn() && request.resource.data.advertiserId == request.auth.uid;
       allow update, delete: if signedIn() && resource.data.advertiserId == request.auth.uid;
     }

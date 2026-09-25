@@ -4,6 +4,12 @@ const MIN_RECOMMENDATION_RATING = 2.5;
 const MIN_CONFIDENT_RATINGS = 5;
 
 const SPAM_PATTERNS = [
+  /movie\s*recap/i, /film\s*recap/i, /\brecap\b/i,
+  /movie\s*explained/i, /film\s*explained/i, /ending\s*explained/i,
+  /movie\s*summary/i, /film\s*summary/i, /plot\s*summary/i,
+  /\breview\b/i, /\breaction\b/i, /\btrailer\b/i, /\bteaser\b/i,
+  /\bshorts?\b/i, /\btop\s*\d+/i, /\bbest\s+\d+/i,
+  /scene\s*(compilation|pack|collection)/i, /fan\s*edit/i,
   /full movie\s*\+\s*download/i, /telegram/i, /whatsapp\s*group/i,
   /\bfree\s*download\b/i, /\bwatch\s*for\s*free\s*download/i,
   /\bcracked\b/i, /\bmod\s*apk\b/i, /\bsubscribe\s*\d+\s*channels/i
