@@ -10,6 +10,11 @@ import {doc,getDoc,setDoc,serverTimestamp,runTransaction,collection,getDocs,quer
 import { isKivoraOwner } from "./access.js";
 
 const EMPTY_VIDEOS=[];
+// Display-only FX reference for showing Naira equivalents beside USD prices.
+// Actual payment should use the server-side verified Flutterwave amount.
+const USD_TO_NGN_DISPLAY_RATE = 1330;
+function usdToNgn(usd){ return Math.round(Number(usd||0) * USD_TO_NGN_DISPLAY_RATE); }
+function moneyUsdNgn(usd){ return `$${Number(usd||0).toFixed(2)} (≈ ₦${usdToNgn(usd).toLocaleString()})`; }
 
 function normalizeVideo(item){
  const id=item?.id?.videoId || item?.id || item?.videoId;
@@ -137,8 +142,39 @@ function App(){
     setNotice("Notifications are enabled. Kivora will group new-video alerts after 10 new eligible videos.");
    }catch(e){setNotice(e.message)}
  }
- const go=t=>{setTab(t);if(t!=="watch")setSelectedVideo(null);setMenu(false);window.scrollTo({top:0,behavior:"auto"})};
- const openVideo=video=>{setSelectedVideo(video);setTab("watch");setMenu(false);window.scrollTo({top:0,behavior:"auto"})};
+ const go=(t,{history=true}={})=>{
+   setTab(t);
+   if(t!=="watch")setSelectedVideo(null);
+   setMenu(false);
+   if(history){
+     const nextHash=t==="home"?"#home":`#${t}`;
+     window.history.pushState({kivora:true,tab:t},"",nextHash);
+   }
+   window.scrollTo({top:0,behavior:"auto"});
+ };
+ const openVideo=video=>{
+   setSelectedVideo(video);
+   setTab("watch");
+   setMenu(false);
+   window.history.pushState({kivora:true,tab:"watch",videoId:video.id},"",`#watch-${encodeURIComponent(video.id)}`);
+   window.scrollTo({top:0,behavior:"auto"});
+ };
+ useEffect(()=>{
+   const onPop=()=>{
+     const state=window.history.state||{};
+     if(state?.kivora && state.tab==="watch"){
+       const found=videos.find(v=>v.id===state.videoId);
+       if(found){setSelectedVideo(found);setTab("watch");return;}
+     }
+     setSelectedVideo(null);
+     setTab(state?.kivora?.tab || (state?.tab && ["home","watchlist","history","account","premium","ads","faqs","about","privacy","terms","disclaimer","creators","help"].includes(state.tab)) ? state.tab : "home");
+     window.scrollTo({top:0,behavior:"auto"});
+   };
+   const current=window.history.state;
+   if(!current?.kivora) window.history.replaceState({kivora:true,tab:tab},"",window.location.hash||"#home");
+   window.addEventListener("popstate",onPop);
+   return()=>window.removeEventListener("popstate",onPop);
+ },[videos,tab]);
 
  return <div className="app">
   <header className="topbar">
@@ -320,8 +356,7 @@ function YouTubePlayer({video,isPro,onNotice,compact=false}){
    </div>
    <div className={`watchControls ${toolsVisible?"visible":"hidden"}`} aria-label="Kivora video controls" onPointerDown={revealTools}>
      <button className="iconTool" onClick={mute} aria-label={muted?"Unmute":"Mute"} title={muted?"Unmute":"Mute"}>{muted?"🔇":"🔊"}</button>
-     <button className="iconTool" onClick={()=>box.current?.requestFullscreen?.().catch(()=>{})} aria-label="Fullscreen" title="Fullscreen">⛶</button>
-     <button className="iconTool" onClick={goLandscape} aria-label="Landscape" title="Landscape">↔</button>
+     <button className="iconTool" onClick={goLandscape} aria-label="Landscape fullscreen" title="Landscape fullscreen">↔</button>
      <button className="iconTool" {...holdProps(startBackward)} aria-label="Hold to rewind at 2x" title="Hold to rewind 2x">◀<small>2×</small></button>
      <button className="iconTool" {...holdProps(startForward)} aria-label="Hold to play forward at 2x" title="Hold to play 2x">▶<small>2×</small></button>
      <button className="iconTool speedReadout" onClick={()=>setPlaybackRate(speed===1?2:1)} aria-label="Toggle 1x or 2x playback speed" title="Toggle playback speed">{speed}×</button>
@@ -351,7 +386,7 @@ function VideoCard({video,user,onNotice,isPro=false,suggested=false,onOpen}){
     <h2>{video.title}</h2>
     <div className="channelLine"><span className="channelAvatar">{(video.channelTitle||"Y").slice(0,1).toUpperCase()}</span><span><b>{video.channelTitle||"YouTube"}</b><small>{Number(video.viewCount||0).toLocaleString()} views{video.publishedAt?` · ${new Date(video.publishedAt).toLocaleDateString()}`:""}</small></span></div>
     <details className="videoInfo" onClick={e=>e.stopPropagation()}><summary>About this video</summary><p>{video.desc}</p><span>{Number(video.youtubeLikeCount||0).toLocaleString()} YouTube likes · {Number(video.commentCount||0).toLocaleString()} comments · {video.hasCaptions?"Captions available":"Captions not indicated"}</span></details>
-    <div className="actionRow compactActions" onClick={e=>e.stopPropagation()}><button onClick={like}>♡ <span className="actionText">{liked?"Liked":"Like"}</span>{likes?` ${likes}`:""}</button><button onClick={save}>＋ <span className="actionText">{saved?"Saved":"Save"}</span></button><button onClick={share}>↗ <span className="actionText">Share</span></button><a className="softBtn" href={`https://www.youtube.com/watch?v=${video.id}`} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()}>▶ <span className="actionText">YouTube</span></a></div>
+    <div className="actionRow compactActions" onClick={e=>e.stopPropagation()}><button onClick={like}>♡ <span className="actionText">{liked?"Liked":"Like"}</span>{likes?` ${likes}`:""}</button><button onClick={save}>＋ <span className="actionText">{saved?"Saved":"Save"}</span></button><button onClick={share}>↗ <span className="actionText">Share</span></button></div>
     <div className="captionHint">Tap to open the full Kivora watch page.</div>
    </div>
  </article>
@@ -359,22 +394,19 @@ function VideoCard({video,user,onNotice,isPro=false,suggested=false,onOpen}){
 
 function VideoWatchPage({video,relatedVideos,sponsored,user,onNotice,isPro,onBack,onOpenVideo}){
  const related=relatedVideos.filter(v=>v.id!==video.id&&!isLikelySpam(v)).slice(0,10);
- const [liked,setLiked]=useState(false),[likes,setLikes]=useState(0),[saved,setSaved]=useState(false),[actionsVisible,setActionsVisible]=useState(true);
- const actionTimer=useRef(null);
- function revealActions(){setActionsVisible(true);if(actionTimer.current)clearTimeout(actionTimer.current);actionTimer.current=setTimeout(()=>setActionsVisible(false),4000);}
+ const [liked,setLiked]=useState(false),[likes,setLikes]=useState(0),[saved,setSaved]=useState(false);
  useEffect(()=>{if(!user)return;setLiked(localStorage.getItem(`kivora-like-${video.id}-${user.uid}`)==="1");},[user,video.id]);
- useEffect(()=>{revealActions();return()=>{if(actionTimer.current)clearTimeout(actionTimer.current)}},[video.id]);
  async function like(){if(!user){onNotice("Connect Google to like videos.");return}try{const next=await toggleLike(video.id,user.uid);setLiked(next);localStorage.setItem(`kivora-like-${video.id}-${user.uid}`,next?"1":"0");setLikes(x=>Math.max(0,x+(next?1:-1)));}catch(e){onNotice(e.message)}}
  async function save(){if(!user){onNotice("Connect Google to save videos.");return}try{setSaved(await saveVideo(video.id,user.uid));}catch(e){onNotice(e.message)}}
  async function share(){const url=`${location.origin}${location.pathname}#video-${video.id}`;try{if(navigator.share){await navigator.share({title:video.title,url});return}if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(url);onNotice("Kivora link copied.");return}throw new Error()}catch(e){if(e?.name!=="AbortError")onNotice("Copy the page link to share.")}}
- return <section className="watchPage" onPointerDown={e=>{if(!e.target.closest('.watchPlayer'))revealActions()}}>
+ return <section className="watchPage">
    <div className="watchTop"><button className="backBtn" onClick={onBack}>← Back to FYP</button><span className="watchSource">Kivora · YouTube</span></div>
    <YouTubePlayer video={video} isPro={isPro} onNotice={onNotice}/>
    <article className="watchInfo">
     <div className="videoMetaLine"><div className="eyebrow">{video.lang}</div></div>
     <h1>{video.title}</h1>
     <div className="watchChannel"><span className="channelAvatar large">{(video.channelTitle||"Y").slice(0,1).toUpperCase()}</span><div><b>{video.channelTitle||"YouTube"}</b><span>{Number(video.viewCount||0).toLocaleString()} views{video.publishedAt?` · ${new Date(video.publishedAt).toLocaleDateString()}`:""}</span></div></div>
-    <div className={`watchActions ${actionsVisible?"visible":"hidden"}`} aria-label="Video actions"><button className="watchActionIcon" onClick={e=>{e.stopPropagation();like();revealActions()}} aria-label={liked?"Unlike":"Like"} title={liked?"Unlike":"Like"}>♡</button><button className="watchActionIcon" onClick={e=>{e.stopPropagation();save();revealActions()}} aria-label={saved?"Remove from saved":"Save"} title={saved?"Remove from saved":"Save"}>＋</button><button className="watchActionIcon" onClick={e=>{e.stopPropagation();share();revealActions()}} aria-label="Share" title="Share">↗</button><a className="softBtn watchActionIcon" href={`https://www.youtube.com/watch?v=${video.id}`} target="_blank" rel="noreferrer" aria-label="Open on YouTube" title="Open on YouTube" onClick={e=>e.stopPropagation()}>▶</a><button className="watchActionMore" onClick={e=>{e.stopPropagation();revealActions()}} aria-label="Show video actions" title="Show actions">•••</button></div>
+    <div className="watchActions visible" aria-label="Video actions"><button className="watchActionIcon" onClick={e=>{e.stopPropagation();like()}} aria-label={liked?"Unlike":"Like"} title={liked?"Unlike":"Like"}>♡</button><button className="watchActionIcon" onClick={e=>{e.stopPropagation();save()}} aria-label={saved?"Remove from saved":"Save"} title={saved?"Remove from saved":"Save"}>＋</button><button className="watchActionIcon" onClick={e=>{e.stopPropagation();share()}} aria-label="Share" title="Share">↗</button></div>
     <details className="watchDescription" open><summary>About this video</summary><p>{video.desc}</p><span>{Number(video.youtubeLikeCount||0).toLocaleString()} YouTube likes · {Number(video.commentCount||0).toLocaleString()} comments · {video.hasCaptions?"Captions available":"Captions not indicated"}</span></details>
     <div className="watchNotice">Comments stay on YouTube. Kivora does not add a separate comment system or paid comment API usage here.</div>
    </article>
@@ -430,7 +462,7 @@ function Premium({user,onNotice,owner=false}){
  const liveRef=useRef(true);
  useEffect(()=>()=>{liveRef.current=false},[]);
  async function checkout(){if(owner){onNotice("Owner access: Kivora Pro is free for this account.");return}if(!user||user.isAnonymous){onNotice("Connect Google before purchasing Pro.");return}setLoading(true);onNotice("Opening secure checkout…");setTimeout(()=>{if(!liveRef.current)return;setLoading(false);onNotice("Checkout endpoint is not configured yet. Add the server-side Flutterwave verification before accepting payment.");},500)}
- return <section className="panel pro"><small>KIVORA PRO</small><h1>More room for the stories you love.</h1><p>Pro is designed around convenience: translated caption controls where the embedded source provides captions, richer collections and an ad-reduced Kivora experience.</p><div className="proGrid"><div><b>Free</b><span>Core discovery · saved videos · original/source captions when available</span></div><div><b>Pro</b><span>Translated caption controls · expanded collections · fewer Kivora ads</span></div></div><button className="primary" onClick={checkout} disabled={loading}>{loading?"Opening…":owner?"Pro enabled for owner":"Continue to secure checkout"}</button><p className="tiny">{owner?"Owner billing bypass is enabled for the configured Kivora owner account.":"Payment is only granted after server-side verification. No client-side “paid” flag unlocks Pro."}</p></section>
+ return <section className="panel pro"><small>KIVORA PRO</small><h1>More room for the stories you love.</h1><p><b>Pricing is shown in USD with a Naira equivalent for clarity.</b> The exact Pro amount is configured by the server before Flutterwave checkout. Pro is designed around convenience: translated caption controls where the embedded source provides captions, richer collections and an ad-reduced Kivora experience.</p><div className="proGrid"><div><b>Free</b><span>Core discovery · saved videos · original/source captions when available</span></div><div><b>Pro</b><span>Translated caption controls · expanded collections · fewer Kivora ads</span></div></div><button className="primary" onClick={checkout} disabled={loading}>{loading?"Opening…":owner?"Pro enabled for owner":"Continue to secure checkout"}</button><p className="tiny">{owner?"Owner billing bypass is enabled for the configured Kivora owner account.":"Payment is only granted after server-side verification. No client-side “paid” flag unlocks Pro."}</p></section>
 }
 
 function AdStudio({owner=false}){
@@ -465,12 +497,12 @@ function AdStudio({owner=false}){
   if(format==="video" && isLikelySpam({title:form.title,description:form.description}))return "Rejected: campaign text triggered the anti-spam check.";
   return "PASS";
  }
- async function submit(e){e.preventDefault();if(submitting)return;setSubmitting(true);setStatus("");const result=preflight();if(result!=="PASS"){setStatus(result);setSubmitting(false);return;}setStatus(`Preflight passed. ${owner?"Owner billing bypass applies. No payment is required.":"Estimated bill: $"+estimatedBill.toFixed(2)+" for "+billableImpressions.toLocaleString()+" billable impressions ("+billableBlocks+" × 1,500 at $"+pricePerBlock.toFixed(2)+"). Final charge is created only after server-side validation."}`);setStep("review");setSubmitting(false);}
+ async function submit(e){e.preventDefault();if(submitting)return;setSubmitting(true);setStatus("");const result=preflight();if(result!=="PASS"){setStatus(result);setSubmitting(false);return;}setStatus(`Preflight passed. ${owner?"Owner billing bypass applies. No payment is required.":"Estimated bill: "+moneyUsdNgn(estimatedBill)+" for "+billableImpressions.toLocaleString()+" billable impressions ("+billableBlocks+" × 1,500 at "+moneyUsdNgn(pricePerBlock)+"). Final charge is created only after server-side validation."}`);setStep("review");setSubmitting(false);}
  if(step==="prep")return <section className="panel"><h1>Advertise with Kivora</h1><p>Every campaign goes through preflight checks before a bill is created. We store monitoring data separately from viewer actions and never count an ad impression as a YouTube view.</p><div className="steps"><div>1. Choose a format.</div><div>2. Provide a Drive asset ID or an approved YouTube URL.</div><div>3. Review the estimated bill before payment.</div><div>4. Server validates, bills and activates only after verification.</div></div><button className="primary" onClick={()=>setStep("formats")}>Choose format</button></section>;
- if(step==="formats")return <section className="panel"><button onClick={()=>setStep("prep")}>← Back</button><h1>Choose format</h1><div className="formatGrid"><button className="formatCard" onClick={()=>choose("square")}><b>Square banner</b><span>1080 × 1080 · Google Drive ID</span><strong>$1.99 / 1,500 impressions</strong></button><button className="formatCard" onClick={()=>choose("rectangle")}><b>Rectangle banner</b><span>1200 × 628 · Google Drive ID</span><strong>$1.99 / 1,500 impressions</strong></button><button className="formatCard" onClick={()=>choose("video")}><b>Video campaign</b><span>Google Drive ID or YouTube URL</span><strong>$2.99 / 1,500 impressions</strong></button></div></section>;
- if(step==="review")return <section className="panel"><button onClick={()=>setStep("form")}>← Edit campaign</button><h1>Bill preview</h1><div className="priceBox"><b>Estimated bill: ${estimatedBill.toFixed(2)}</b><span>{owner?"Owner rate: $0.00 (billing bypass)":`Rate: $${pricePerBlock.toFixed(2)} / 1,500 impressions`}</span><span>Target impressions: {targetImpressions.toLocaleString()}</span><span>Billable impressions: {billableImpressions.toLocaleString()}</span><span>Duration: {days} day{days===1?"":"s"}</span><small>{owner?"This account is exempt from Kivora advertising charges, but campaign validation and monitoring still apply.":"No payment should be captured until the server re-checks the campaign, asset access, price, currency, ownership and campaign status."}</small></div><button className="primary" onClick={()=>setStatus("Payment endpoint must create the checkout server-side. No charge has been attempted by this screen.")}>Continue to secure payment</button>{status&&<div className="status">{status}</div>}</section>;
- const meta={square:["Square banner","$1.99 / 1,500 impressions"],rectangle:["Rectangle banner","$1.99 / 1,500 impressions"],video:["Video campaign","$2.99 / 1,500 impressions"]}[format];
- return <section className="panel"><button onClick={()=>setStep("formats")}>← Change format</button><h1>{meta[0]}</h1><form onSubmit={submit}>{[["assetId",format==="video"?"Google Drive file ID or YouTube URL":"Google Drive file ID"],["brand","Brand name"],["title","Campaign title"],["description","Description"],["site","Destination URL"],["country","Target country"],["targetImpressions","Target impressions"],["duration","Campaign duration (days)"]].map(([k,l])=><label key={k}>{l}<input value={form[k]} onChange={e=>update(k,e.target.value)} required/></label>)}<div className="priceBox"><span>Rate <b>{owner?"$0.00 — owner billing bypass":"$"+pricePerBlock.toFixed(2)+" / 1,500 impressions"}</b></span><span>Billable impressions <b>{billableImpressions.toLocaleString()}</b></span><span>Estimated bill <b>${estimatedBill.toFixed(2)}</b></span><small>{owner?"No payment is required for the configured owner account. Campaign validation still applies.":"The bill is calculated before payment. It is not a final charge until the server validates it."}</small></div><button className="primary" disabled={submitting}>{submitting?"Checking…":"Review bill before payment"}</button></form>{status&&<div className="status">{status}</div>}</section>
+ if(step==="formats")return <section className="panel"><button onClick={()=>setStep("prep")}>← Back</button><h1>Choose format</h1><div className="formatGrid"><button className="formatCard" onClick={()=>choose("square")}><b>Square banner</b><span>1080 × 1080 · Google Drive ID</span><strong>{moneyUsdNgn(1.99)} / 1,500 impressions</strong></button><button className="formatCard" onClick={()=>choose("rectangle")}><b>Rectangle banner</b><span>1200 × 628 · Google Drive ID</span><strong>{moneyUsdNgn(1.99)} / 1,500 impressions</strong></button><button className="formatCard" onClick={()=>choose("video")}><b>Video campaign</b><span>Google Drive ID or YouTube URL</span><strong>{moneyUsdNgn(2.99)} / 1,500 impressions</strong></button></div></section>;
+ if(step==="review")return <section className="panel"><button onClick={()=>setStep("form")}>← Edit campaign</button><h1>Bill preview</h1><div className="priceBox"><b>Estimated bill: {moneyUsdNgn(estimatedBill)}</b><span>{owner?"Owner rate: $0.00 (billing bypass)":`Rate: ${moneyUsdNgn(pricePerBlock)} / 1,500 impressions`}</span><span>Target impressions: {targetImpressions.toLocaleString()}</span><span>Billable impressions: {billableImpressions.toLocaleString()}</span><span>Duration: {days} day{days===1?"":"s"}</span><small>{owner?"This account is exempt from Kivora advertising charges, but campaign validation and monitoring still apply.":"No payment should be captured until the server re-checks the campaign, asset access, price, currency, ownership and campaign status."}</small></div><button className="primary" onClick={()=>setStatus("Payment endpoint must create the checkout server-side. No charge has been attempted by this screen.")}>Continue to secure payment</button>{status&&<div className="status">{status}</div>}</section>;
+ const meta={square:["Square banner",moneyUsdNgn(1.99)+" / 1,500 impressions"],rectangle:["Rectangle banner",moneyUsdNgn(1.99)+" / 1,500 impressions"],video:["Video campaign",moneyUsdNgn(2.99)+" / 1,500 impressions"]}[format];
+ return <section className="panel"><button onClick={()=>setStep("formats")}>← Change format</button><h1>{meta[0]}</h1><form onSubmit={submit}>{[["assetId",format==="video"?"Google Drive file ID or YouTube URL":"Google Drive file ID"],["brand","Brand name"],["title","Campaign title"],["description","Description"],["site","Destination URL"],["country","Target country"],["targetImpressions","Target impressions"],["duration","Campaign duration (days)"]].map(([k,l])=><label key={k}>{l}<input value={form[k]} onChange={e=>update(k,e.target.value)} required/></label>)}<div className="priceBox"><span>Rate <b>{owner?"$0.00 (₦0) — owner billing bypass":moneyUsdNgn(pricePerBlock)+" / 1,500 impressions"}</b></span><span>Billable impressions <b>{billableImpressions.toLocaleString()}</b></span><span>Estimated bill <b>{moneyUsdNgn(estimatedBill)}</b></span><small>{owner?"No payment is required for the configured owner account. Campaign validation still applies.":"The bill is calculated before payment. It is not a final charge until the server validates it."}</small></div><button className="primary" disabled={submitting}>{submitting?"Checking…":"Review bill before payment"}</button></form>{status&&<div className="status">{status}</div>}</section>
 }
 
 function SponsoredCard({campaign,onNotice}){
@@ -491,9 +523,8 @@ function extractYouTubeId(value=""){
 function FAQs(){
  const items=[
   ["Where do Kivora videos come from?","Kivora discovers video metadata through YouTube's API and plays the source through YouTube's official embedded player. Kivora does not download or re-host the audiovisual stream."],
-  ["Can I open a video on YouTube?","Yes. Every video has a YouTube link, and the menu also provides a direct YouTube link for actions that belong on YouTube."],
-  ["Are sponsored videos clearly marked?","Yes. Paid campaigns that pass Kivora's approval flow are shown in the FYP with a Sponsored label."],
-  ["How much does advertising cost?","Image/banner placements are $1.99 per 1,500 impressions. Video advertising is $2.99 per 1,500 impressions. Final billing is server-authoritative."],
+    ["Are sponsored videos clearly marked?","Yes. Paid campaigns that pass Kivora's approval flow are shown in the FYP with a Sponsored label."],
+  ["How much does advertising cost?",`Image/banner placements are ${moneyUsdNgn(1.99)} per 1,500 impressions. Video advertising is ${moneyUsdNgn(2.99)} per 1,500 impressions. Naira figures are display estimates using ₦${USD_TO_NGN_DISPLAY_RATE.toLocaleString()} per $1; the server remains authoritative for the final payment currency and amount.`],
   ["Does Kivora replace YouTube?","No. YouTube remains the source for YouTube content, playback, creator attribution and YouTube-specific actions."],
   ["Can I use Kivora in dark mode?","Yes. Choose Light, Dark or System mode from the menu. Your preference is saved on this device."],
   ["What native-style features does Kivora provide?","Kivora supports installable PWA behavior where the browser allows it, fullscreen playback, device sharing, saved videos, watch-first access and push notifications after permission is granted."]

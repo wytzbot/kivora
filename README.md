@@ -195,3 +195,10 @@ Subtitles can be toggled on/off after playback starts. Pro users can choose a su
 ## YouTube-style watch page
 
 Tapping a FYP video opens a dedicated watch page with the official YouTube player, compact actions, related action movies and clearly labelled sponsored placements between related videos. Comments remain on YouTube.
+### Latest watch-page refinements
+- The ↔ player action is the Kivora landscape/fullscreen action.
+- Like, Save and Share are compact icon actions and remain visible; they no longer auto-hide.
+- The direct “Open on YouTube” action was removed from Kivora UI.
+- Device Back uses browser history so leaving a watch page returns to the previous Kivora page instead of treating the watch page as a terminal screen.
+- Advertising prices show USD plus a Naira display equivalent. The current UI reference is ₦1,330 per $1, so $1.99 ≈ ₦2,647 and $2.99 ≈ ₦3,977. The exchange rate is configurable server-side with `KIVORA_USD_NGN_RATE`.
+- YouTube's embedded player still controls its own native progress-bar color; the official API currently supports only `red` or `white`, so Kivora does not overlay the iframe to fake a brand-colored YouTube control.

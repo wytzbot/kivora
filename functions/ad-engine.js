@@ -8,6 +8,13 @@ export const BANNER_PRICE_PER_BLOCK_USD = 1.99;
 export const VIDEO_PRICE_PER_BLOCK_USD = 2.99;
 export const PRICE_PER_BLOCK_USD = BANNER_PRICE_PER_BLOCK_USD; // backwards-compatible export
 export const MAX_TARGET_IMPRESSIONS = 100000000;
+// Display/checkout reference rate. Keep this configurable on the server so Flutterwave
+// can be charged in the chosen currency after server-side verification.
+export const USD_TO_NGN_RATE = Number(process.env.KIVORA_USD_NGN_RATE || 1330);
+
+export function usdToNgn(usd) {
+  return Math.round(Number(usd || 0) * USD_TO_NGN_RATE);
+}
 
 export function priceForFormat(format) {
   return format === "video" ? VIDEO_PRICE_PER_BLOCK_USD : BANNER_PRICE_PER_BLOCK_USD;
@@ -28,7 +35,7 @@ export function calculateBill({ targetImpressions, format = "square" }) {
   const billableImpressions = blocks * IMPRESSION_BLOCK_SIZE;
   const pricePerBlock = priceForFormat(format);
   const total = Number((blocks * pricePerBlock).toFixed(2));
-  return { targetImpressions: impressions, format, impressionBlockSize: IMPRESSION_BLOCK_SIZE, pricePerBlock, blocks, billableImpressions, total };
+  return { targetImpressions: impressions, format, impressionBlockSize: IMPRESSION_BLOCK_SIZE, pricePerBlock, pricePerBlockNgn: usdToNgn(pricePerBlock), blocks, billableImpressions, total, totalNgn: usdToNgn(total), currencyDisplayRate: USD_TO_NGN_RATE };
 }
 
 export function calculateDeliveredSpend(impressions, format = "square") {
