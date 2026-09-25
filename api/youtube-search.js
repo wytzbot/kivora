@@ -84,15 +84,24 @@ export default async function handler(req, res) {
   const q = String(rawQ || "").trim().slice(0, 100);
   const category = String(rawCategory || "all").trim().toLowerCase();
   const queries = q ? [`${q} action movie full movie -recap -explained -review -reaction -trailer -teaser -shorts`] : industryQueries(category).map(term => /^(all|suggested|new)$/.test(category) ? `${term} -bollywood -hindi -tamil -telugu -malayalam -kannada -punjabi -marathi -bengali` : term);
+  // Each YouTube search query has its own pagination cursor. The client sends
+  // pageToken0/pageToken1/... so an infinite feed can continue without
+  // restarting the same search from page one.
+  const pageTokens = queries.map((_, i) => {
+    const value = Array.isArray(req.query?.[`pageToken${i}`]) ? req.query[`pageToken${i}`][0] : req.query?.[`pageToken${i}`];
+    return String(value || "").trim();
+  });
+
 
   try {
-    const results = await Promise.all(queries.map(async (term) => {
+    const results = await Promise.all(queries.map(async (term, queryIndex) => {
       const params = new URLSearchParams({
         part: "snippet", q: term, type: "video", maxResults: "15",
         order: category === "new" ? "date" : "relevance",
         regionCode: "US", safeSearch: "moderate", videoEmbeddable: "true", videoSyndicated: "true",
         videoCategoryId: "1", videoDuration: "long", videoCaption: "any", key
       });
+      if (pageTokens[queryIndex]) params.set("pageToken", pageTokens[queryIndex]);
       const response = await fetch(`https://www.googleapis.com/youtube/v3/search?${params}`);
       const data = await response.json();
       if (!response.ok) {
@@ -100,11 +109,11 @@ export default async function handler(req, res) {
         const message = data?.error?.message || "YouTube Data API request failed.";
         throw new Error(reason ? `${message} (${reason})` : message);
       }
-      return data.items || [];
+      return { items: data.items || [], nextPageToken: data.nextPageToken || "" };
     }));
 
     const seen = new Set();
-    const rawItems = results.flat()
+    const rawItems = results.flatMap(result => result.items)
       .filter(isActionMovie)
       .filter((item) => { const id = item.id.videoId; if (seen.has(id)) return false; seen.add(id); return true; });
 
@@ -138,7 +147,13 @@ export default async function handler(req, res) {
       return durationOk && !explicitExcluded && !wrongIndustry && actionSignal && movieSignal;
     });
 
-    return res.status(200).json({ source: "youtube-data-api-v3", query: q || "Kivora action-movie FYP", category, items });
+    return res.status(200).json({
+      source: "youtube-data-api-v3",
+      query: q || "Kivora action-movie FYP",
+      category,
+      items,
+      nextPageTokens: results.map(result => result.nextPageToken || "")
+    });
   } catch (error) {
     return res.status(502).json({ error: error?.message || "Kivora could not reach YouTube right now." });
   }

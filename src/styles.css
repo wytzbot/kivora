@@ -138,3 +138,9 @@ html,body{background:var(--bg);color:var(--text)}body{font-size:17px;line-height
     padding:7px 0 !important;
   }
 }
+
+/* Endless FYP loading */
+.feedSentinel{max-width:860px;margin:8px auto 30px;padding:18px;text-align:center;color:var(--muted);font-size:14px;min-height:24px;display:flex;justify-content:center;align-items:center;gap:9px}
+.feedSpinner{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:kivoraSpin .8s linear infinite}
+@keyframes kivoraSpin{to{transform:rotate(360deg)}}
+@media(max-width:700px){.feedSentinel{padding:15px 8px;font-size:13px}}

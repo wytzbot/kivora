@@ -37,10 +37,11 @@ function normalizeVideo(item){
  };
 }
 
-async function fetchKivoraVideos(query="", category="all"){
+async function fetchKivoraVideos(query="", category="all", pageTokens=[]){
  const params=new URLSearchParams();
  if(query) params.set("q",query);
  if(category && category!=="all") params.set("category",category);
+ (Array.isArray(pageTokens)?pageTokens:[]).forEach((token,index)=>{if(token) params.set(`pageToken${index}`,token)});
  const qs=params.toString();
  const url=`/api/youtube-search${qs?`?${qs}`:""}`;
  const res=await fetch(url,{headers:{accept:"application/json"}});
@@ -48,7 +49,7 @@ async function fetchKivoraVideos(query="", category="all"){
  try{data=await res.json()}catch{}
  if(!res.ok) throw new Error(data?.error || `Video discovery failed (${res.status})`);
  const items=Array.isArray(data?.items)?data.items.map(normalizeVideo).filter(Boolean):[];
- return {items,source:data?.source||"youtube"};
+ return {items,source:data?.source||"youtube",nextPageTokens:Array.isArray(data?.nextPageTokens)?data.nextPageTokens:[]};
 }
 
 async function rateVideo(videoId,uid,value){
@@ -79,7 +80,8 @@ function App(){
  const [tab,setTab]=useState("home"),[premium,setPremium]=useState(false),[menu,setMenu]=useState(false);
  const [user,setUser]=useState(auth.currentUser),[busy,setBusy]=useState(false),[notice,setNotice]=useState("");
  const [notifyPrompt,setNotifyPrompt]=useState(true);
- const [pendingNewVideos,setPendingNewVideos]=useState(0),[ratings,setRatings]=useState({}),[query,setQuery]=useState(""),[category,setCategory]=useState("all"),[videos,setVideos]=useState(EMPTY_VIDEOS),[sponsored,setSponsored]=useState([]),[videoLoading,setVideoLoading]=useState(true),[videoError,setVideoError]=useState(""),[theme,setTheme]=useState(()=>localStorage.getItem("kivora-theme")||"system"),[installPrompt,setInstallPrompt]=useState(null),[selectedVideo,setSelectedVideo]=useState(null);
+ const [pendingNewVideos,setPendingNewVideos]=useState(0),[ratings,setRatings]=useState({}),[query,setQuery]=useState(""),[category,setCategory]=useState("all"),[videos,setVideos]=useState(EMPTY_VIDEOS),[pageTokens,setPageTokens]=useState([]),[hasMore,setHasMore]=useState(true),[loadingMore,setLoadingMore]=useState(false),[sponsored,setSponsored]=useState([]),[videoLoading,setVideoLoading]=useState(true),[videoError,setVideoError]=useState(""),[theme,setTheme]=useState(()=>localStorage.getItem("kivora-theme")||"system"),[installPrompt,setInstallPrompt]=useState(null),[selectedVideo,setSelectedVideo]=useState(null);
+ const feedSentinelRef=useRef(null);
  const signedIn=!!user&&!user.isAnonymous;
  const owner=isKivoraOwner(user);
  useEffect(()=>{
@@ -115,23 +117,50 @@ function App(){
 
  useEffect(()=>{
    let live=true;
-   Promise.all(videos.map(v=>getDoc(doc(db,"videos",v.id)).catch(()=>null))).then(snaps=>{if(!live)return;const next={};snaps.forEach((s,i)=>{const d=s?.data()||{};next[videos[i].id]={ratingAverage:Number(d.ratingAverage||3),ratingCount:Number(d.ratingCount||0)}});setRatings(next)});
+   const missing=videos.filter(v=>!Object.prototype.hasOwnProperty.call(ratings,v.id));
+   if(!missing.length)return()=>{live=false};
+   Promise.all(missing.map(v=>getDoc(doc(db,"videos",v.id)).catch(()=>null))).then(snaps=>{if(!live)return;const next={};snaps.forEach((s,i)=>{const d=s?.data()||{};next[missing[i].id]={ratingAverage:Number(d.ratingAverage||3),ratingCount:Number(d.ratingCount||0)}});setRatings(prev=>({...prev,...next}))});
    return()=>{live=false};
- },[videos]);
+ },[videos,ratings]);
 
  useEffect(()=>{
    const q=query.trim();
    const timer=setTimeout(async()=>{
-    setVideoLoading(true);setVideoError("");
+    setVideoLoading(true);setVideoError("");setPageTokens([]);setHasMore(true);setVideos([]);
     try{
-      const result=await fetchKivoraVideos(q,category);
+      const result=await fetchKivoraVideos(q,category,[]);
       setVideos(result.items);
-      if(!result.items.length)setVideoError(q?"No YouTube videos matched that search.":"YouTube returned no videos for Kivora right now.");
-    }catch(e){setVideoError(e?.message||"Video discovery could not be completed.");setVideos([]);}
+      setPageTokens(result.nextPageTokens);
+      setHasMore(result.nextPageTokens.some(Boolean));
+      if(!result.items.length&&!result.nextPageTokens.some(Boolean))setVideoError(q?"No YouTube videos matched that search.":"YouTube returned no eligible videos for Kivora right now.");
+    }catch(e){setVideoError(e?.message||"Video discovery could not be completed.");setVideos([]);setPageTokens([]);setHasMore(false);}
     finally{setVideoLoading(false);}
    },q?450:50);
    return()=>clearTimeout(timer);
  },[query,category]);
+
+ async function loadMoreVideos(){
+   if(videoLoading||loadingMore||!hasMore)return;
+   setLoadingMore(true);setVideoError("");
+   try{
+     const result=await fetchKivoraVideos(query.trim(),category,pageTokens);
+     setVideos(prev=>{
+       const seen=new Set(prev.map(v=>v.id));
+       return [...prev,...result.items.filter(v=>!seen.has(v.id))];
+     });
+     setPageTokens(result.nextPageTokens);
+     setHasMore(result.nextPageTokens.some(Boolean));
+   }catch(e){setVideoError(e?.message||"More videos could not be loaded right now.");}
+   finally{setLoadingMore(false);}
+ }
+
+ useEffect(()=>{
+   const node=feedSentinelRef.current;
+   if(!node)return;
+   const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting))loadMoreVideos()},{rootMargin:"900px 0px"});
+   observer.observe(node);
+   return()=>observer.disconnect();
+ },[videoLoading,loadingMore,hasMore,pageTokens,query,category]);
 
  async function guest(){setBusy(true);try{await startAnonymousSession();setNotice("You can start watching immediately.");}catch(e){setNotice(authMessage(e))}finally{setBusy(false)}}
  async function google(){setBusy(true);try{const r=await signInWithGoogle();if(r)setNotice("Google sign-in complete.");}catch(e){setNotice(authMessage(e))}finally{setBusy(false)}}
@@ -236,6 +265,7 @@ function App(){
       if(!cards.length&&!videoLoading)cards.push(<section className="emptyState" key="empty"><h3>No videos to show</h3><p>Try another category or search term.</p></section>);
       return cards;
     })()}</div>
+    <div ref={feedSentinelRef} className="feedSentinel" aria-live="polite">{loadingMore&&<><span className="feedSpinner"/>Finding more movies…</>}{!loadingMore&&!hasMore&&videos.length>0&&<span>You've reached the end of the currently available results.</span>}</div>
     <details className="sourceNote sourceDetails"><summary><b>How Kivora's feed works</b></summary><p>Suggested videos combine public YouTube engagement signals with Kivora viewer ratings. New sorts by publication date. Categories focus on action movies across major film industries. Recaps, explainers, reviews, reactions, trailers, Shorts and similar non-movie results are filtered out. Sponsored placements are clearly labelled and inserted into the same FYP flow as other content.</p></details>
     <details className="sourceNote sourceDetails"><summary><b>Subtitles & language</b></summary><p>Kivora can use the official YouTube player's caption system when a source video provides captions. You can turn captions on/off and choose a preferred caption language. YouTube decides which original or translated caption tracks are available; Kivora does not download or re-host caption files.</p></details>
     <details className="sourceNote sourceDetails"><summary><b>How Kivora gets videos</b></summary><p>Kivora uses official YouTube video IDs and metadata, then plays the creator's video through YouTube's official embedded player. The original source, creator and YouTube controls remain attributable to the source platform.</p><button onClick={()=>go("creators")}>Read our creator & rights policy →</button></details>

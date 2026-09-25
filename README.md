@@ -208,3 +208,8 @@ Tapping a FYP video opens a dedicated watch page with the official YouTube playe
 Kivora does **not** need the Google Cloud Translation API just to show YouTube's own captions or ask the embedded YouTube player for a preferred caption language. Kivora uses YouTube's supported `cc_load_policy` and `cc_lang_pref` player parameters. If YouTube has an original or translated caption track for the selected video, the player can display it; if not, Kivora cannot manufacture a subtitle track for that third-party video.
 
 Google Cloud Translation API is only needed if Kivora itself wants to translate arbitrary text/transcripts. That requires a separate translation service and billing/quota setup. It does **not** automatically inject translated subtitles into arbitrary YouTube embeds. YouTube's Data API caption download/translation endpoints require authorization tied to videos the authenticated user has permission to edit, so Kivora should not use them to pull captions from unrelated creators' videos.
+
+## Infinite FYP pagination
+The Kivora FYP now uses YouTube's `nextPageToken` pagination. The initial discovery page loads normally, then an intersection observer requests the next page automatically as the viewer approaches the bottom of the feed. Each discovery query keeps its own YouTube page token so pagination remains valid for multi-query categories. Results are de-duplicated before being appended. The feed continues until YouTube has no further page token or the API/quota prevents additional discovery.
+
+This is an effectively endless feed from the user's perspective, not an unlimited YouTube API entitlement. YouTube Data API quota still applies, and Kivora should keep server-side caching/rate limits enabled in production.
