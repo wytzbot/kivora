@@ -183,3 +183,15 @@ The endpoint filters discovery to embeddable/syndicated videos and returns norma
 
 ## Action-movie discovery update
 Kivora's FYP is action-movie focused across multiple industries: Suggested, All, New, Hollywood, Bollywood, Chinese, Korean, Japanese, Nollywood, South Indian, Thai, and Indonesian. Discovery queries are action-oriented and the server/client filters exclude recap, explained, summary, review, reaction, trailer/teaser, Shorts, fan-edit and similar non-movie results. YouTube remains the playback source through the official embedded player.
+
+## FYP filtering and presentation update
+
+Kivora now uses a thumbnail-first movie-feed presentation: the FYP shows the source thumbnail, duration, title, channel, views/date and compact actions. A viewer taps the thumbnail to open the official YouTube player.
+
+Discovery is stricter for the action-movie feed. YouTube search requests use the long-duration filter and Kivora applies a 40-minute minimum, action/movie signals, and exclusion rules for recaps, explained videos, reviews, reactions, trailers, Shorts, clips, vlogs, music and other non-movie formats. General All/Suggested/New discovery also excludes common Indian-industry terms so those results are primarily reached through their dedicated categories; Bollywood, South Indian and other industry tabs remain available.
+
+Subtitles can be toggled on/off after playback starts. Pro users can choose a subtitle language when the source video exposes captions. This uses the official YouTube player; caption/language availability is controlled by the source video and YouTube.
+
+## YouTube-style watch page
+
+Tapping a FYP video opens a dedicated watch page with the official YouTube player, compact actions, related action movies and clearly labelled sponsored placements between related videos. Comments remain on YouTube.

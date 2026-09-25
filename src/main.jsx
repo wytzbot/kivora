@@ -26,6 +26,8 @@ function normalizeVideo(item){
   viewCount:Number(item?.statistics?.viewCount||0),
   youtubeLikeCount:Number(item?.statistics?.likeCount||0),
   commentCount:Number(item?.statistics?.commentCount||0),
+  durationSeconds:Number(item?.contentDetails?.durationSeconds||0),
+  hasCaptions:String(item?.contentDetails?.caption||"false")==="true",
   engagementScore:Number(item?.engagementScore||0)
  };
 }
@@ -72,7 +74,7 @@ function App(){
  const [tab,setTab]=useState("home"),[premium,setPremium]=useState(false),[menu,setMenu]=useState(false);
  const [user,setUser]=useState(auth.currentUser),[busy,setBusy]=useState(false),[notice,setNotice]=useState("");
  const [notifyPrompt,setNotifyPrompt]=useState(true);
- const [pendingNewVideos,setPendingNewVideos]=useState(0),[ratings,setRatings]=useState({}),[query,setQuery]=useState(""),[category,setCategory]=useState("all"),[videos,setVideos]=useState(EMPTY_VIDEOS),[sponsored,setSponsored]=useState([]),[videoLoading,setVideoLoading]=useState(true),[videoError,setVideoError]=useState(""),[theme,setTheme]=useState(()=>localStorage.getItem("kivora-theme")||"system"),[installPrompt,setInstallPrompt]=useState(null);
+ const [pendingNewVideos,setPendingNewVideos]=useState(0),[ratings,setRatings]=useState({}),[query,setQuery]=useState(""),[category,setCategory]=useState("all"),[videos,setVideos]=useState(EMPTY_VIDEOS),[sponsored,setSponsored]=useState([]),[videoLoading,setVideoLoading]=useState(true),[videoError,setVideoError]=useState(""),[theme,setTheme]=useState(()=>localStorage.getItem("kivora-theme")||"system"),[installPrompt,setInstallPrompt]=useState(null),[selectedVideo,setSelectedVideo]=useState(null);
  const signedIn=!!user&&!user.isAnonymous;
  const owner=isKivoraOwner(user);
  useEffect(()=>{
@@ -135,7 +137,8 @@ function App(){
     setNotice("Notifications are enabled. Kivora will group new-video alerts after 10 new eligible videos.");
    }catch(e){setNotice(e.message)}
  }
- const go=t=>{setTab(t);setMenu(false);window.scrollTo({top:0,behavior:"auto"})};
+ const go=t=>{setTab(t);if(t!=="watch")setSelectedVideo(null);setMenu(false);window.scrollTo({top:0,behavior:"auto"})};
+ const openVideo=video=>{setSelectedVideo(video);setTab("watch");setMenu(false);window.scrollTo({top:0,behavior:"auto"})};
 
  return <div className="app">
   <header className="topbar">
@@ -167,6 +170,7 @@ function App(){
   {!user&&<section className="welcome"><div><small>WELCOME TO KIVORA</small><h2>Watch first. Decide later.</h2><p>Start instantly as a guest, or connect Google to keep your Kivora activity across devices.</p></div><div className="welcomeActions"><button className="primary" onClick={guest} disabled={busy}>Start watching</button><button onClick={google} disabled={busy}>Continue with Google</button></div></section>}
 
   <main>
+   {tab==="watch"&&selectedVideo&&<VideoWatchPage video={selectedVideo} relatedVideos={videos} sponsored={sponsored} user={user} isPro={premium} onNotice={setNotice} onBack={()=>go("home")} onOpenVideo={openVideo}/>}
    {tab==="home"&&<>
     <nav className="categoryNav" aria-label="Video categories">{[
       ["suggested","Suggested"],["all","All"],["new","New"],["hollywood","Hollywood"],
@@ -187,14 +191,14 @@ function App(){
       ranked.sort((a,b)=>category==="new"?new Date(b.publishedAt||0)-new Date(a.publishedAt||0):b.recScore-a.recScore);
       const cards=[];
       ranked.forEach((v,i)=>{
-        cards.push(<VideoCard key={v.id} video={v} user={user} onNotice={setNotice} isPro={premium} suggested={!query.trim() && category!=="new" && i<5}/>);
+        cards.push(<VideoCard key={v.id} video={v} user={user} onNotice={setNotice} isPro={premium} suggested={!query.trim() && category!=="new" && i<5} onOpen={openVideo}/>);
         if(sponsored.length && (i===2 || (i>2 && (i-2)%5===0))){const ad=sponsored[Math.min(Math.floor(i/5),sponsored.length-1)];cards.push(<SponsoredCard key={`ad-${ad.id}-${i}`} campaign={ad} onNotice={setNotice}/>);}
       });
       if(!cards.length&&!videoLoading)cards.push(<section className="emptyState" key="empty"><h3>No videos to show</h3><p>Try another category or search term.</p></section>);
       return cards;
     })()}</div>
     <details className="sourceNote sourceDetails"><summary><b>How Kivora's feed works</b></summary><p>Suggested videos combine public YouTube engagement signals with Kivora viewer ratings. New sorts by publication date. Categories focus on action movies across major film industries. Recaps, explainers, reviews, reactions, trailers, Shorts and similar non-movie results are filtered out. Sponsored placements are clearly labelled and inserted into the same FYP flow as other content.</p></details>
-    <details className="sourceNote sourceDetails"><summary><b>Google-powered translated captions</b></summary><p>Kivora Pro can use translated caption tracks exposed by the embedded YouTube player when translation is available for the source video. Kivora does not download or re-host caption files.</p></details>
+    <details className="sourceNote sourceDetails"><summary><b>Subtitles & language</b></summary><p>Kivora Pro lets you turn subtitles on or off and choose a subtitle language through the official YouTube player when a caption track is available. Language availability depends on the source video and YouTube; Kivora does not download or re-host caption files.</p></details>
     <details className="sourceNote sourceDetails"><summary><b>How Kivora gets videos</b></summary><p>Kivora uses official YouTube video IDs and metadata, then plays the creator's video through YouTube's official embedded player. The original source, creator and YouTube controls remain attributable to the source platform.</p><button onClick={()=>go("creators")}>Read our creator & rights policy →</button></details>
    </>}
    {tab==="watchlist"&&<Saved user={user} videos={videos} onNotice={setNotice}/>}
@@ -223,88 +227,168 @@ function loadYouTubeApi(callback){
  }
 }
 
-function VideoCard({video,user,onNotice,isPro=false,suggested=false}){
- const box=useRef(null),player=useRef(null),readyRef=useRef(false),visibleRef=useRef(false),[ready,setReady]=useState(false),[muted,setMuted]=useState(true);
- const [captions,setCaptions]=useState(false),[captionLang,setCaptionLang]=useState("en"),[liked,setLiked]=useState(false),[likes,setLikes]=useState(0),[saved,setSaved]=useState(false);
- const [playing,setPlaying]=useState(false),[seekOverlay,setSeekOverlay]=useState(null);
- const tapCountRef=useRef({left:0,right:0,timer:null});
+function formatDuration(seconds=0){
+ const n=Math.max(0,Math.trunc(Number(seconds)||0));
+ const h=Math.floor(n/3600),m=Math.floor((n%3600)/60),s=n%60;
+ return h?`${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`:`${m}:${String(s).padStart(2,"0")}`;
+}
+
+function YouTubePlayer({video,isPro,onNotice,compact=false}){
+ const box=useRef(null),player=useRef(null),speedTimer=useRef(null),hideTimer=useRef(null);
+ const [activated,setActivated]=useState(true),[muted,setMuted]=useState(false),[captions,setCaptions]=useState(false),[captionLang,setCaptionLang]=useState("en"),[landscape,setLandscape]=useState(false),[toolsVisible,setToolsVisible]=useState(true),[speed,setSpeed]=useState(1);
  useEffect(()=>{
-  let observer,cancelled=false;
-  const applyVisibility=()=>{
-   if(!player.current||!readyRef.current)return;
-   if(visibleRef.current){try{player.current.mute();player.current.playVideo();setMuted(true)}catch{}}
-   else{try{player.current.pauseVideo()}catch{}}
-  };
+  let cancelled=false;
   const load=()=>{
-   if(cancelled||!window.YT?.Player||!box.current||document.getElementById(`yt-${video.id}`)?.dataset.ready)return;
-   player.current=new window.YT.Player(`yt-${video.id}`,{videoId:video.id,width:"100%",height:"100%",
-    playerVars:{autoplay:0,controls:1,rel:0,modestbranding:1,playsinline:1,enablejsapi:1,cc_load_policy:0,cc_lang_pref:"en"},
-    events:{onReady:()=>{readyRef.current=true;setReady(true);const el=document.getElementById(`yt-${video.id}`);if(el)el.dataset.ready="1";applyVisibility();},onStateChange:e=>setPlaying(e.data===window.YT.PlayerState.PLAYING)}
+   if(cancelled||!window.YT?.Player||!box.current||!document.getElementById(`yt-watch-${video.id}`))return;
+   player.current=new window.YT.Player(`yt-watch-${video.id}`,{
+    videoId:video.id,width:"100%",height:"100%",
+    playerVars:{autoplay:0,controls:1,rel:0,playsinline:1,enablejsapi:1,color:"white",cc_load_policy:captions?1:0,cc_lang_pref:captionLang,origin:window.location.origin},
+    events:{
+      onReady:()=>{if(captions){try{player.current.loadModule("captions");player.current.setOption("captions","track",{language:captionLang});}catch{}}},
+      onAutoplayBlocked:()=>onNotice("YouTube blocked automatic playback. Tap the player to start it.")
+    }
    });
   };
   loadYouTubeApi(load);
-  observer=new IntersectionObserver(entries=>{
-    const e=entries[0];
-    visibleRef.current=e.isIntersecting && e.intersectionRatio>=.55;
-    applyVisibility();
-  },{threshold:[0,.55,1]});
-  if(box.current)observer.observe(box.current);
-  return()=>{cancelled=true;readyRef.current=false;observer?.disconnect();try{player.current?.destroy()}catch{}};
- },[video.id]);
- useEffect(()=>{if(!user)return;const key=`kivora-like-${video.id}-${user.uid}`;setLiked(localStorage.getItem(key)==="1");},[user,video.id]);
- async function like(){if(!user){onNotice("Start watching first to interact.");return}try{const next=await toggleLike(video.id,user.uid);setLiked(next);localStorage.setItem(`kivora-like-${video.id}-${user.uid}`,next?"1":"0");setLikes(x=>Math.max(0,x+(next?1:-1)));}catch(e){onNotice(e.message)}}
- async function save(){if(!user){onNotice("Start watching first to save videos.");return}try{setSaved(await saveVideo(video.id,user.uid));}catch(e){onNotice(e.message)}}
- function mute(){if(!player.current)return;try{if(muted){player.current.unMute();setMuted(false)}else{player.current.mute();setMuted(true)}}catch{}}
- function cc(lang=captionLang){
-  if(!isPro){onNotice("Caption translation are a Kivora Pro feature.");return}
-  if(!player.current)return;
-  try{
-    player.current.loadModule("captions");
-    player.current.setOption("captions","track",{language:lang});
-    setCaptions(true); setCaptionLang(lang);
-  }catch{onNotice("This video may not have captions or a translated track available.")}
-}
- function handleSeekTap(side){
-   if(!player.current || !readyRef.current) return;
-   const state=tapCountRef.current;
-   const count=Math.min(20,(state[side]||0)+1);
-   state[side]=count;
-   clearTimeout(state.timer);
-   state.timer=setTimeout(()=>{
-     if(count>=2){
-       const seconds=(count-1)*10;
-       try{
-         const current=Number(player.current.getCurrentTime?.()||0);
-         const duration=Number(player.current.getDuration?.()||0);
-         const next=side==="right" ? Math.min(duration,current+seconds) : Math.max(0,current-seconds);
-         player.current.seekTo(next,true);
-       }catch{}
-       setSeekOverlay({side,seconds});
-       setTimeout(()=>setSeekOverlay(null),700);
-     }
-     state[side]=0;
-   },360);
+  return()=>{cancelled=true;try{player.current?.destroy()}catch{}player.current=null};
+ },[video.id,activated]);
+ useEffect(()=>{revealTools();return()=>{if(speedTimer.current)clearInterval(speedTimer.current);if(hideTimer.current)clearTimeout(hideTimer.current)}},[]);
+ function revealTools(){
+  setToolsVisible(true);
+  if(hideTimer.current)clearTimeout(hideTimer.current);
+  hideTimer.current=setTimeout(()=>setToolsVisible(false),4000);
  }
- async function landscape(){
+ function mute(){if(!player.current)return;try{if(muted){player.current.unMute();setMuted(false)}else{player.current.mute();setMuted(true)}revealTools()}catch{}}
+ function restartPlayer(nextCaptions=captions,nextLang=captionLang){
+  try{player.current?.destroy()}catch{}
+  player.current=null;
+  const el=document.getElementById(`yt-watch-${video.id}`); if(el)el.innerHTML="";
+  setActivated(false); setTimeout(()=>setActivated(true),30);
+  setCaptions(nextCaptions); setCaptionLang(nextLang); revealTools();
+ }
+ function toggleCaptions(){
+  if(!isPro){onNotice("Subtitle controls and translated subtitle selection are a Kivora Pro feature.");return;}
+  if(!video.hasCaptions){onNotice("This video does not advertise a caption track through YouTube.");return;}
+  const next=!captions; restartPlayer(next,captionLang); onNotice(next?`Subtitles on · ${captionLang}`:"Subtitles off");
+ }
+ function changeCaptionLanguage(lang){
+  if(!isPro){onNotice("Translated subtitle selection is a Kivora Pro feature.");return;}
+  if(!video.hasCaptions){onNotice("This video does not advertise a caption track through YouTube.");return;}
+  setCaptionLang(lang); setCaptions(true); revealTools();
+  try{player.current?.loadModule("captions");player.current?.setOption("captions","track",{language:lang});onNotice(`Subtitle language set to ${lang}.`)}catch{restartPlayer(true,lang)}
+ }
+ async function goLandscape(){
+  try{if(!document.fullscreenElement)await box.current?.requestFullscreen?.();await screen.orientation?.lock?.("landscape");setLandscape(true);revealTools()}catch{onNotice("Landscape mode is only available where your browser/device supports orientation locking.")}
+ }
+ function setPlaybackRate(rate){
+  try{player.current?.setPlaybackRate?.(rate);setSpeed(rate);revealTools()}catch{onNotice("This YouTube video does not expose that playback speed.")}
+ }
+ function startForward(){
+  if(speedTimer.current)clearInterval(speedTimer.current);
+  setPlaybackRate(2);
+ }
+ function startBackward(){
+  if(speedTimer.current)clearInterval(speedTimer.current);
+  setSpeed(2);
+  speedTimer.current=setInterval(()=>{
    try{
-     if(!document.fullscreenElement) await box.current?.requestFullscreen?.();
-     await screen.orientation?.lock?.("landscape");
+    const current=Number(player.current?.getCurrentTime?.()||0);
+    player.current?.seekTo?.(Math.max(0,current-0.5),true);
    }catch{}
+  },250);
+  revealTools();
  }
- async function share(){const url=location.href+`#video-${video.id}`;try{if(navigator.share){await navigator.share({title:video.title,url});return}if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(url);onNotice("Kivora link copied.");return}throw new Error("copy unavailable")}catch(e){if(e?.name!=="AbortError")onNotice("Copy the page link to share.")}}
- return <article className="videoCard" id={`video-${video.id}`}>
-  <div className="playerWrap" ref={box}>
-   <div id={`yt-${video.id}`} className="ytPlayer"/>
-   <button className="seekZone seekLeft" aria-label="Tap to rewind" onClick={()=>handleSeekTap("left")} />
-   <button className="seekZone seekRight" aria-label="Tap to fast forward" onClick={()=>handleSeekTap("right")} />
-   {seekOverlay&&<div className={`seekOverlay ${seekOverlay.side}`}>{seekOverlay.side==="right"?"▶":"◀"} x{seekOverlay.seconds}</div>}
-   <div className="autoBadge">{playing?"Playing":"Kivora player"} · {muted?"Muted":"Sound on"}</div>
-   <div className="playerTools"><button onClick={mute}>{muted?"🔇 Unmute":"🔊 Mute"}</button><button onClick={landscape}>⛶ Landscape</button><button onClick={()=>box.current?.requestFullscreen?.().catch(()=>{})}>⛶ Fullscreen</button><button className={!isPro?"proTool":""} onClick={()=>cc(captionLang)}>{isPro?(captions?"CC On":"CC + Translate"):"🔒 Pro captions"}</button></div>
-  </div>
-  <div className="videoBody"><div className="videoMetaLine"><div className="eyebrow">{video.lang}</div>{suggested&&<span className="suggestedBadge">SUGGESTED</span>}</div><h2>{video.title}</h2><details className="videoInfo"><summary>About this video</summary><p>{video.desc}</p><span>{video.channelTitle||"YouTube source"}{video.publishedAt?` · ${new Date(video.publishedAt).toLocaleDateString()}`:""}</span><span>{Number(video.viewCount||0).toLocaleString()} views · {Number(video.youtubeLikeCount||0).toLocaleString()} YouTube likes · {Number(video.commentCount||0).toLocaleString()} comments</span></details><div className="captionRow"><span>Caption translation</span><select value={captionLang} onChange={e=>{setCaptionLang(e.target.value);cc(e.target.value)}} disabled={!isPro} aria-label="Caption language"><option value="en">English</option><option value="zh-Hans">简体中文</option><option value="zh-Hant">繁體中文</option><option value="hi">हिन्दी</option><option value="ar">العربية</option><option value="fr">Français</option><option value="es">Español</option><option value="pt">Português</option></select>{!isPro&&<small>PRO</small>}</div>
-   <div className="actionRow"><button onClick={like}>♡ {liked?"Liked":"Like"} {likes?likes:""}</button><button onClick={save}>{saved?"✓ Saved":"＋ Save"}</button><button onClick={share}>↗ Share</button><a className="softBtn" href={`https://www.youtube.com/watch?v=${video.id}`} target="_blank" rel="noreferrer">YouTube ↗</a></div>
-   <OriginalityRating video={video} user={user} onNotice={onNotice}/>
-  </div>
+ function stopSpeed(){
+  if(speedTimer.current){clearInterval(speedTimer.current);speedTimer.current=null;}
+  if(speed!==1)setPlaybackRate(1);
+ }
+ function holdProps(start){
+  return {
+   onPointerDown:e=>{e.preventDefault();start();},
+   onPointerUp:e=>{e.preventDefault();stopSpeed();},
+   onPointerCancel:stopSpeed,
+   onPointerLeave:stopSpeed,
+   onKeyDown:e=>{if(e.key===' '||e.key==='Enter'){e.preventDefault();start();}},
+   onKeyUp:e=>{if(e.key===' '||e.key==='Enter'){e.preventDefault();stopSpeed();}},
+   onContextMenu:e=>e.preventDefault()
+  };
+ }
+ if(!activated)return <div className={`playerWrap watchPlayer ${compact?"compactWatchPlayer":""}`} ref={box}/>;
+ return <>
+   <div className={`playerWrap watchPlayer ${compact?"compactWatchPlayer":""}`} ref={box} onPointerDown={revealTools}>
+    <div id={`yt-watch-${video.id}`} className="ytPlayer"/>
+   </div>
+   <div className={`watchControls ${toolsVisible?"visible":"hidden"}`} aria-label="Kivora video controls" onPointerDown={revealTools}>
+     <button className="iconTool" onClick={mute} aria-label={muted?"Unmute":"Mute"} title={muted?"Unmute":"Mute"}>{muted?"🔇":"🔊"}</button>
+     <button className="iconTool" onClick={()=>box.current?.requestFullscreen?.().catch(()=>{})} aria-label="Fullscreen" title="Fullscreen">⛶</button>
+     <button className="iconTool" onClick={goLandscape} aria-label="Landscape" title="Landscape">↔</button>
+     <button className="iconTool" {...holdProps(startBackward)} aria-label="Hold to rewind at 2x" title="Hold to rewind 2x">◀<small>2×</small></button>
+     <button className="iconTool" {...holdProps(startForward)} aria-label="Hold to play forward at 2x" title="Hold to play 2x">▶<small>2×</small></button>
+     <button className="iconTool speedReadout" onClick={()=>setPlaybackRate(speed===1?2:1)} aria-label="Toggle 1x or 2x playback speed" title="Toggle playback speed">{speed}×</button>
+     <button className={`iconTool ${!isPro?"proTool":""}`} onClick={toggleCaptions} aria-label={captions?"Turn subtitles off":"Turn subtitles on"} title={captions?"Subtitles on":"Subtitles off"}>CC</button>
+     <select className="iconSelect" value={captionLang} onChange={e=>changeCaptionLanguage(e.target.value)} aria-label="Subtitle language" disabled={!isPro||!video.hasCaptions} title="Subtitle language">
+       <option value="en">EN</option><option value="zh-Hans">中简</option><option value="zh-Hant">中繁</option><option value="hi">HI</option><option value="ko">KO</option><option value="ja">JA</option><option value="ar">AR</option><option value="fr">FR</option><option value="es">ES</option><option value="pt">PT</option>
+     </select>
+   </div>
+ </>;
+}
+
+function VideoCard({video,user,onNotice,isPro=false,suggested=false,onOpen}){
+ const [liked,setLiked]=useState(false),[likes,setLikes]=useState(0),[saved,setSaved]=useState(false);
+ useEffect(()=>{if(!user)return;const key=`kivora-like-${video.id}-${user.uid}`;setLiked(localStorage.getItem(key)==="1");},[user,video.id]);
+ async function like(e){e.stopPropagation();if(!user){onNotice("Start watching first to interact.");return}try{const next=await toggleLike(video.id,user.uid);setLiked(next);localStorage.setItem(`kivora-like-${video.id}-${user.uid}`,next?"1":"0");setLikes(x=>Math.max(0,x+(next?1:-1)));}catch(e2){onNotice(e2.message)}}
+ async function save(e){e.stopPropagation();if(!user){onNotice("Start watching first to save videos.");return}try{setSaved(await saveVideo(video.id,user.uid));}catch(e2){onNotice(e2.message)}}
+ function share(e){e.stopPropagation();const url=`${location.origin}${location.pathname}#video-${video.id}`;if(navigator.share){navigator.share({title:video.title,url}).catch(err=>{if(err?.name!=="AbortError")onNotice("Share was cancelled or unavailable.")});return}if(navigator.clipboard?.writeText){navigator.clipboard.writeText(url).then(()=>onNotice("Kivora link copied.")).catch(()=>onNotice("Copy the page link to share."));return}onNotice("Copy the page link to share.")}
+ return <article className="videoCard feedVideoCard" onClick={()=>onOpen?.(video)} role="link" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();onOpen?.(video)}}}>
+   <div className="playerWrap isThumbnail">
+    <div className="thumbnailButton" aria-label={`Open ${video.title}`}>
+      <img src={video.thumb} alt="" loading="lazy"/><span className="thumbShade"/><span className="playCircle">▶</span>
+      {video.durationSeconds>0&&<span className="durationBadge">{formatDuration(video.durationSeconds)}</span>}
+    </div>
+   </div>
+   <div className="videoBody">
+    <div className="videoMetaLine"><div className="eyebrow">{video.lang}</div>{suggested&&<span className="suggestedBadge">SUGGESTED</span>}</div>
+    <h2>{video.title}</h2>
+    <div className="channelLine"><span className="channelAvatar">{(video.channelTitle||"Y").slice(0,1).toUpperCase()}</span><span><b>{video.channelTitle||"YouTube"}</b><small>{Number(video.viewCount||0).toLocaleString()} views{video.publishedAt?` · ${new Date(video.publishedAt).toLocaleDateString()}`:""}</small></span></div>
+    <details className="videoInfo" onClick={e=>e.stopPropagation()}><summary>About this video</summary><p>{video.desc}</p><span>{Number(video.youtubeLikeCount||0).toLocaleString()} YouTube likes · {Number(video.commentCount||0).toLocaleString()} comments · {video.hasCaptions?"Captions available":"Captions not indicated"}</span></details>
+    <div className="actionRow compactActions" onClick={e=>e.stopPropagation()}><button onClick={like}>♡ <span className="actionText">{liked?"Liked":"Like"}</span>{likes?` ${likes}`:""}</button><button onClick={save}>＋ <span className="actionText">{saved?"Saved":"Save"}</span></button><button onClick={share}>↗ <span className="actionText">Share</span></button><a className="softBtn" href={`https://www.youtube.com/watch?v=${video.id}`} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()}>▶ <span className="actionText">YouTube</span></a></div>
+    <div className="captionHint">Tap to open the full Kivora watch page.</div>
+   </div>
+ </article>
+}
+
+function VideoWatchPage({video,relatedVideos,sponsored,user,onNotice,isPro,onBack,onOpenVideo}){
+ const related=relatedVideos.filter(v=>v.id!==video.id&&!isLikelySpam(v)).slice(0,10);
+ const [liked,setLiked]=useState(false),[likes,setLikes]=useState(0),[saved,setSaved]=useState(false),[actionsVisible,setActionsVisible]=useState(true);
+ const actionTimer=useRef(null);
+ function revealActions(){setActionsVisible(true);if(actionTimer.current)clearTimeout(actionTimer.current);actionTimer.current=setTimeout(()=>setActionsVisible(false),4000);}
+ useEffect(()=>{if(!user)return;setLiked(localStorage.getItem(`kivora-like-${video.id}-${user.uid}`)==="1");},[user,video.id]);
+ useEffect(()=>{revealActions();return()=>{if(actionTimer.current)clearTimeout(actionTimer.current)}},[video.id]);
+ async function like(){if(!user){onNotice("Connect Google to like videos.");return}try{const next=await toggleLike(video.id,user.uid);setLiked(next);localStorage.setItem(`kivora-like-${video.id}-${user.uid}`,next?"1":"0");setLikes(x=>Math.max(0,x+(next?1:-1)));}catch(e){onNotice(e.message)}}
+ async function save(){if(!user){onNotice("Connect Google to save videos.");return}try{setSaved(await saveVideo(video.id,user.uid));}catch(e){onNotice(e.message)}}
+ async function share(){const url=`${location.origin}${location.pathname}#video-${video.id}`;try{if(navigator.share){await navigator.share({title:video.title,url});return}if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(url);onNotice("Kivora link copied.");return}throw new Error()}catch(e){if(e?.name!=="AbortError")onNotice("Copy the page link to share.")}}
+ return <section className="watchPage" onPointerDown={e=>{if(!e.target.closest('.watchPlayer'))revealActions()}}>
+   <div className="watchTop"><button className="backBtn" onClick={onBack}>← Back to FYP</button><span className="watchSource">Kivora · YouTube</span></div>
+   <YouTubePlayer video={video} isPro={isPro} onNotice={onNotice}/>
+   <article className="watchInfo">
+    <div className="videoMetaLine"><div className="eyebrow">{video.lang}</div></div>
+    <h1>{video.title}</h1>
+    <div className="watchChannel"><span className="channelAvatar large">{(video.channelTitle||"Y").slice(0,1).toUpperCase()}</span><div><b>{video.channelTitle||"YouTube"}</b><span>{Number(video.viewCount||0).toLocaleString()} views{video.publishedAt?` · ${new Date(video.publishedAt).toLocaleDateString()}`:""}</span></div></div>
+    <div className={`watchActions ${actionsVisible?"visible":"hidden"}`} aria-label="Video actions"><button className="watchActionIcon" onClick={e=>{e.stopPropagation();like();revealActions()}} aria-label={liked?"Unlike":"Like"} title={liked?"Unlike":"Like"}>♡</button><button className="watchActionIcon" onClick={e=>{e.stopPropagation();save();revealActions()}} aria-label={saved?"Remove from saved":"Save"} title={saved?"Remove from saved":"Save"}>＋</button><button className="watchActionIcon" onClick={e=>{e.stopPropagation();share();revealActions()}} aria-label="Share" title="Share">↗</button><a className="softBtn watchActionIcon" href={`https://www.youtube.com/watch?v=${video.id}`} target="_blank" rel="noreferrer" aria-label="Open on YouTube" title="Open on YouTube" onClick={e=>e.stopPropagation()}>▶</a><button className="watchActionMore" onClick={e=>{e.stopPropagation();revealActions()}} aria-label="Show video actions" title="Show actions">•••</button></div>
+    <details className="watchDescription" open><summary>About this video</summary><p>{video.desc}</p><span>{Number(video.youtubeLikeCount||0).toLocaleString()} YouTube likes · {Number(video.commentCount||0).toLocaleString()} comments · {video.hasCaptions?"Captions available":"Captions not indicated"}</span></details>
+    <div className="watchNotice">Comments stay on YouTube. Kivora does not add a separate comment system or paid comment API usage here.</div>
+   </article>
+   <div className="relatedSection">
+    <div className="relatedHeading"><div><small>UP NEXT</small><h2>Related action movies</h2></div><span>{related.length} videos</span></div>
+    {related.length?related.map((v,i)=><React.Fragment key={v.id}><RelatedVideoCard video={v} onOpen={onOpenVideo}/>{sponsored.length&&((i+1)%4===0)?<SponsoredCard key={`watch-ad-${sponsored[Math.floor(i/4)%sponsored.length].id}-${i}`} campaign={sponsored[Math.floor(i/4)%sponsored.length]} onNotice={onNotice}/>:null}</React.Fragment>):<div className="emptyState"><h3>No related videos yet</h3><p>Go back to the FYP for more action-movie suggestions.</p></div>}
+   </div>
+ </section>
+}
+
+function RelatedVideoCard({video,onOpen}){
+ return <article className="relatedCard" onClick={()=>onOpen?.(video)} role="link" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();onOpen?.(video)}}}>
+  <div className="relatedThumb"><img src={video.thumb} alt="" loading="lazy"/><span className="durationBadge">{formatDuration(video.durationSeconds)}</span><span className="relatedPlay">▶</span></div>
+  <div className="relatedBody"><h3>{video.title}</h3><b>{video.channelTitle||"YouTube"}</b><span>{Number(video.viewCount||0).toLocaleString()} views{video.publishedAt?` · ${new Date(video.publishedAt).toLocaleDateString()}`:""}</span></div>
  </article>
 }
 
