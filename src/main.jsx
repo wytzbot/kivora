@@ -185,7 +185,7 @@ function App(){
    <div className="topActions">
     <button className="menuBtn" aria-label="Open menu" onClick={()=>setMenu(!menu)}>☰ <span>Menu</span></button>
     {!signedIn&&<button className="signinMini" onClick={google} disabled={busy}>Sign in</button>}
-    {signedIn&&<button className="avatar" onClick={()=>go("account")} aria-label="Account">K</button>}
+    {signedIn&&<button className="avatar accountAvatar" onClick={()=>go("account")} aria-label={`Account: ${user.email||"Google account"}`} title={user.email||"Google account"}>{user.photoURL?<img src={user.photoURL} alt=""/>:<span>{(user.email||"K").trim().slice(0,1).toUpperCase()}</span>}</button>}
    </div>
    {menu&&<aside className="menuPanel">
     <div className="menuHead"><strong>Explore Kivora</strong><button className="iconBtn" onClick={()=>setMenu(false)}>×</button></div>
@@ -277,7 +277,7 @@ function RotatePhoneIcon(){
 }
 
 function YouTubePlayer({video,isPro,onNotice,compact=false}){
- const box=useRef(null),player=useRef(null),speedTimer=useRef(null),hideTimer=useRef(null);
+ const box=useRef(null),player=useRef(null),speedTimer=useRef(null);
  const [activated,setActivated]=useState(true),[muted,setMuted]=useState(false),[captions,setCaptions]=useState(false),[captionLang,setCaptionLang]=useState("en"),[landscape,setLandscape]=useState(false),[toolsVisible,setToolsVisible]=useState(true),[speed,setSpeed]=useState(1);
  useEffect(()=>{
   let cancelled=false;
@@ -295,11 +295,11 @@ function YouTubePlayer({video,isPro,onNotice,compact=false}){
   loadYouTubeApi(load);
   return()=>{cancelled=true;try{player.current?.destroy()}catch{}player.current=null};
  },[video.id,activated]);
- useEffect(()=>{revealTools();return()=>{if(speedTimer.current)clearInterval(speedTimer.current);if(hideTimer.current)clearTimeout(hideTimer.current)}},[]);
+ useEffect(()=>{setToolsVisible(true);return()=>{if(speedTimer.current)clearInterval(speedTimer.current)}},[]);
  function revealTools(){
+  // Player utility controls are intentionally permanent.
+  // The 4-second auto-hide behavior is not used on the watch page.
   setToolsVisible(true);
-  if(hideTimer.current)clearTimeout(hideTimer.current);
-  hideTimer.current=setTimeout(()=>setToolsVisible(false),4000);
  }
  function mute(){if(!player.current)return;try{if(muted){player.current.unMute();setMuted(false)}else{player.current.mute();setMuted(true)}revealTools()}catch{}}
  function restartPlayer(nextCaptions=captions,nextLang=captionLang){

@@ -60,3 +60,81 @@ html,body{background:var(--bg);color:var(--text)}body{font-size:17px;line-height
 .watchActionsNearPlayer{margin:8px 0 10px;display:flex;flex-wrap:wrap;gap:9px;align-items:center}
 .watchActionsNearPlayer .watchActionIcon{width:44px;height:44px;min-width:44px;min-height:44px;border-radius:50%;display:grid;place-items:center;padding:0;font-size:19px;line-height:1}
 @media(max-width:700px){.watchActionsNearPlayer{gap:7px;margin:7px 0 9px}.watchActionsNearPlayer .watchActionIcon{width:42px;height:42px;min-width:42px;min-height:42px;font-size:18px}}
+
+
+/* Final fix: watch-page Like/Save/Share actions are permanently visible.
+   Only the small player utility controls may auto-hide; these action buttons never do. */
+.watchPage .watchActions,
+.watchPage .watchActions.visible,
+.watchPage .watchActions.hidden {
+  display:flex !important;
+  visibility:visible !important;
+  opacity:1 !important;
+  max-height:60px !important;
+  min-height:40px !important;
+  height:auto !important;
+  margin:10px 0 12px !important;
+  padding:0 !important;
+  overflow:visible !important;
+  transform:none !important;
+  pointer-events:auto !important;
+}
+.watchPage .watchActionIcon {
+  display:grid !important;
+  visibility:visible !important;
+  opacity:1 !important;
+  position:relative !important;
+  z-index:2 !important;
+}
+.accountAvatar {
+  overflow:hidden;
+  padding:0 !important;
+  display:grid !important;
+  place-items:center;
+}
+.accountAvatar img {
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+}
+.accountAvatar span {
+  font-size:14px;
+  font-weight:900;
+  line-height:1;
+}
+@media(max-width:700px){
+  .watchPage .watchActions,
+  .watchPage .watchActions.visible,
+  .watchPage .watchActions.hidden {
+    min-height:42px !important;
+    max-height:60px !important;
+    margin:8px 0 10px !important;
+  }
+}
+
+/* Permanent watch-player utility controls: mute, rotate, rewind/forward 2x, speed, CC and language.
+   These must never disappear after a timeout or a tap. */
+.watchPage .watchControls,
+.watchPage .watchControls.visible,
+.watchPage .watchControls.hidden {
+  display:flex !important;
+  visibility:visible !important;
+  opacity:1 !important;
+  max-height:100px !important;
+  min-height:40px !important;
+  height:auto !important;
+  padding:8px 0 !important;
+  margin:0 !important;
+  transform:none !important;
+  pointer-events:auto !important;
+  overflow:visible !important;
+}
+@media(max-width:700px){
+  .watchPage .watchControls,
+  .watchPage .watchControls.visible,
+  .watchPage .watchControls.hidden {
+    max-height:100px !important;
+    padding:7px 0 !important;
+  }
+}
