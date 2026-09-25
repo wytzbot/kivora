@@ -92,6 +92,9 @@ function App(){
  useEffect(()=>{let live=true;getProEntitlement(user).then(v=>{if(live)setPremium(v)});return()=>{live=false}},[user]);
  useEffect(()=>{
    const off=onAuthStateChanged(auth,u=>setUser(u));
+   // Give guests an anonymous Kivora session so Like/Save are immediately interactive.
+   // Google sign-in can later link this session and keep the account history.
+   if(!auth.currentUser) startAnonymousSession().catch(()=>{});
    finishGoogleRedirect().then(r=>r?.user&&setNotice("Google sign-in complete.")).catch(e=>setNotice(authMessage(e)));
    return off;
  },[]);
@@ -234,7 +237,7 @@ function App(){
       return cards;
     })()}</div>
     <details className="sourceNote sourceDetails"><summary><b>How Kivora's feed works</b></summary><p>Suggested videos combine public YouTube engagement signals with Kivora viewer ratings. New sorts by publication date. Categories focus on action movies across major film industries. Recaps, explainers, reviews, reactions, trailers, Shorts and similar non-movie results are filtered out. Sponsored placements are clearly labelled and inserted into the same FYP flow as other content.</p></details>
-    <details className="sourceNote sourceDetails"><summary><b>Subtitles & language</b></summary><p>Kivora Pro lets you turn subtitles on or off and choose a subtitle language through the official YouTube player when a caption track is available. Language availability depends on the source video and YouTube; Kivora does not download or re-host caption files.</p></details>
+    <details className="sourceNote sourceDetails"><summary><b>Subtitles & language</b></summary><p>Kivora can use the official YouTube player's caption system when a source video provides captions. You can turn captions on/off and choose a preferred caption language. YouTube decides which original or translated caption tracks are available; Kivora does not download or re-host caption files.</p></details>
     <details className="sourceNote sourceDetails"><summary><b>How Kivora gets videos</b></summary><p>Kivora uses official YouTube video IDs and metadata, then plays the creator's video through YouTube's official embedded player. The original source, creator and YouTube controls remain attributable to the source platform.</p><button onClick={()=>go("creators")}>Read our creator & rights policy →</button></details>
    </>}
    {tab==="watchlist"&&<Saved user={user} videos={videos} onNotice={setNotice}/>}
@@ -267,6 +270,10 @@ function formatDuration(seconds=0){
  const n=Math.max(0,Math.trunc(Number(seconds)||0));
  const h=Math.floor(n/3600),m=Math.floor((n%3600)/60),s=n%60;
  return h?`${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`:`${m}:${String(s).padStart(2,"0")}`;
+}
+
+function RotatePhoneIcon(){
+ return <svg className="rotatePhoneIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="7" y="3.5" width="10" height="17" rx="2.2" fill="none" stroke="currentColor" strokeWidth="1.8"/><circle cx="12" cy="17.7" r=".8" fill="currentColor"/><path d="M4 8.2a8.2 8.2 0 0 1 3.4-3.4M20 15.8a8.2 8.2 0 0 1-3.4 3.4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/><path d="m5.1 4.3 2.5.2-.7 2.4M18.9 19.7l-2.5-.2.7-2.4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
 }
 
 function YouTubePlayer({video,isPro,onNotice,compact=false}){
@@ -305,13 +312,14 @@ function YouTubePlayer({video,isPro,onNotice,compact=false}){
  function toggleCaptions(){
   if(!isPro){onNotice("Subtitle controls and translated subtitle selection are a Kivora Pro feature.");return;}
   if(!video.hasCaptions){onNotice("This video does not advertise a caption track through YouTube.");return;}
-  const next=!captions; restartPlayer(next,captionLang); onNotice(next?`Subtitles on · ${captionLang}`:"Subtitles off");
+  const next=!captions; restartPlayer(next,captionLang); onNotice(next?`Subtitles on · preferred language ${captionLang}`:"Subtitles off");
  }
  function changeCaptionLanguage(lang){
-  if(!isPro){onNotice("Translated subtitle selection is a Kivora Pro feature.");return;}
+  if(!isPro){onNotice("Subtitle language selection is a Kivora Pro feature.");return;}
   if(!video.hasCaptions){onNotice("This video does not advertise a caption track through YouTube.");return;}
-  setCaptionLang(lang); setCaptions(true); revealTools();
-  try{player.current?.loadModule("captions");player.current?.setOption("captions","track",{language:lang});onNotice(`Subtitle language set to ${lang}.`)}catch{restartPlayer(true,lang)}
+  // Apply YouTube's supported cc_lang_pref parameter by recreating the official player.
+  restartPlayer(true,lang);
+  onNotice(`Preferred subtitle language: ${lang}. YouTube will use it when that caption/translation track is available.`);
  }
  async function goLandscape(){
   try{if(!document.fullscreenElement)await box.current?.requestFullscreen?.();await screen.orientation?.lock?.("landscape");setLandscape(true);revealTools()}catch{onNotice("Landscape mode is only available where your browser/device supports orientation locking.")}
@@ -356,7 +364,7 @@ function YouTubePlayer({video,isPro,onNotice,compact=false}){
    </div>
    <div className={`watchControls ${toolsVisible?"visible":"hidden"}`} aria-label="Kivora video controls" onPointerDown={revealTools}>
      <button className="iconTool" onClick={mute} aria-label={muted?"Unmute":"Mute"} title={muted?"Unmute":"Mute"}>{muted?"🔇":"🔊"}</button>
-     <button className="iconTool" onClick={goLandscape} aria-label="Landscape fullscreen" title="Landscape fullscreen">↔</button>
+     <button className="iconTool rotatePhoneTool" onClick={goLandscape} aria-label="Rotate phone to landscape" title="Rotate phone to landscape"><RotatePhoneIcon/></button>
      <button className="iconTool" {...holdProps(startBackward)} aria-label="Hold to rewind at 2x" title="Hold to rewind 2x">◀<small>2×</small></button>
      <button className="iconTool" {...holdProps(startForward)} aria-label="Hold to play forward at 2x" title="Hold to play 2x">▶<small>2×</small></button>
      <button className="iconTool speedReadout" onClick={()=>setPlaybackRate(speed===1?2:1)} aria-label="Toggle 1x or 2x playback speed" title="Toggle playback speed">{speed}×</button>
@@ -371,8 +379,8 @@ function YouTubePlayer({video,isPro,onNotice,compact=false}){
 function VideoCard({video,user,onNotice,isPro=false,suggested=false,onOpen}){
  const [liked,setLiked]=useState(false),[likes,setLikes]=useState(0),[saved,setSaved]=useState(false);
  useEffect(()=>{if(!user)return;const key=`kivora-like-${video.id}-${user.uid}`;setLiked(localStorage.getItem(key)==="1");},[user,video.id]);
- async function like(e){e.stopPropagation();if(!user){onNotice("Start watching first to interact.");return}try{const next=await toggleLike(video.id,user.uid);setLiked(next);localStorage.setItem(`kivora-like-${video.id}-${user.uid}`,next?"1":"0");setLikes(x=>Math.max(0,x+(next?1:-1)));}catch(e2){onNotice(e2.message)}}
- async function save(e){e.stopPropagation();if(!user){onNotice("Start watching first to save videos.");return}try{setSaved(await saveVideo(video.id,user.uid));}catch(e2){onNotice(e2.message)}}
+ async function like(e){e.stopPropagation();const uid=user?.uid||"guest";try{const next=user?await toggleLike(video.id,user.uid):(localStorage.getItem(`kivora-like-${video.id}-guest`)!=="1");setLiked(next);localStorage.setItem(`kivora-like-${video.id}-${uid}`,next?"1":"0");setLikes(x=>Math.max(0,x+(next?1:-1)));if(!user)onNotice("Liked on this device. Connect Google to sync your Kivora activity.");}catch(e2){onNotice(e2.message)}}
+ async function save(e){e.stopPropagation();const uid=user?.uid||"guest";try{const next=user?await saveVideo(video.id,user.uid):(localStorage.getItem(`kivora-saved-${video.id}-guest`)!=="1");setSaved(next);localStorage.setItem(`kivora-saved-${video.id}-${uid}`,next?"1":"0");if(!user)onNotice("Saved on this device. Connect Google to sync your Kivora activity.");}catch(e2){onNotice(e2.message)}}
  function share(e){e.stopPropagation();const url=`${location.origin}${location.pathname}#video-${video.id}`;if(navigator.share){navigator.share({title:video.title,url}).catch(err=>{if(err?.name!=="AbortError")onNotice("Share was cancelled or unavailable.")});return}if(navigator.clipboard?.writeText){navigator.clipboard.writeText(url).then(()=>onNotice("Kivora link copied.")).catch(()=>onNotice("Copy the page link to share."));return}onNotice("Copy the page link to share.")}
  return <article className="videoCard feedVideoCard" onClick={()=>onOpen?.(video)} role="link" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();onOpen?.(video)}}}>
    <div className="playerWrap isThumbnail">
@@ -396,17 +404,18 @@ function VideoWatchPage({video,relatedVideos,sponsored,user,onNotice,isPro,onBac
  const related=relatedVideos.filter(v=>v.id!==video.id&&!isLikelySpam(v)).slice(0,10);
  const [liked,setLiked]=useState(false),[likes,setLikes]=useState(0),[saved,setSaved]=useState(false);
  useEffect(()=>{if(!user)return;setLiked(localStorage.getItem(`kivora-like-${video.id}-${user.uid}`)==="1");},[user,video.id]);
- async function like(){if(!user){onNotice("Connect Google to like videos.");return}try{const next=await toggleLike(video.id,user.uid);setLiked(next);localStorage.setItem(`kivora-like-${video.id}-${user.uid}`,next?"1":"0");setLikes(x=>Math.max(0,x+(next?1:-1)));}catch(e){onNotice(e.message)}}
- async function save(){if(!user){onNotice("Connect Google to save videos.");return}try{setSaved(await saveVideo(video.id,user.uid));}catch(e){onNotice(e.message)}}
+ async function like(){const uid=user?.uid||"guest";try{const next=user?await toggleLike(video.id,user.uid):(localStorage.getItem(`kivora-like-${video.id}-guest`)!=="1");setLiked(next);localStorage.setItem(`kivora-like-${video.id}-${uid}`,next?"1":"0");setLikes(x=>Math.max(0,x+(next?1:-1)));if(!user)onNotice("Liked on this device. Connect Google to sync your Kivora activity.");}catch(e){onNotice(e.message)}}
+ async function save(){const uid=user?.uid||"guest";try{const next=user?await saveVideo(video.id,user.uid):(localStorage.getItem(`kivora-saved-${video.id}-guest`)!=="1");setSaved(next);localStorage.setItem(`kivora-saved-${video.id}-${uid}`,next?"1":"0");if(!user)onNotice("Saved on this device. Connect Google to sync your Kivora activity.");}catch(e){onNotice(e.message)}}
  async function share(){const url=`${location.origin}${location.pathname}#video-${video.id}`;try{if(navigator.share){await navigator.share({title:video.title,url});return}if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(url);onNotice("Kivora link copied.");return}throw new Error()}catch(e){if(e?.name!=="AbortError")onNotice("Copy the page link to share.")}}
  return <section className="watchPage">
    <div className="watchTop"><button className="backBtn" onClick={onBack}>← Back to FYP</button><span className="watchSource">Kivora · YouTube</span></div>
    <YouTubePlayer video={video} isPro={isPro} onNotice={onNotice}/>
+    <div className="watchActions visible" aria-label="Video actions"><button className="watchActionIcon" onClick={e=>{e.stopPropagation();like()}} aria-label={liked?"Unlike":"Like"} title={liked?"Unlike":"Like"}>♡</button><button className="watchActionIcon" onClick={e=>{e.stopPropagation();save()}} aria-label={saved?"Remove from saved":"Save"} title={saved?"Remove from saved":"Save"}>＋</button><button className="watchActionIcon" onClick={e=>{e.stopPropagation();share()}} aria-label="Share" title="Share">↗</button></div>
    <article className="watchInfo">
     <div className="videoMetaLine"><div className="eyebrow">{video.lang}</div></div>
     <h1>{video.title}</h1>
     <div className="watchChannel"><span className="channelAvatar large">{(video.channelTitle||"Y").slice(0,1).toUpperCase()}</span><div><b>{video.channelTitle||"YouTube"}</b><span>{Number(video.viewCount||0).toLocaleString()} views{video.publishedAt?` · ${new Date(video.publishedAt).toLocaleDateString()}`:""}</span></div></div>
-    <div className="watchActions visible" aria-label="Video actions"><button className="watchActionIcon" onClick={e=>{e.stopPropagation();like()}} aria-label={liked?"Unlike":"Like"} title={liked?"Unlike":"Like"}>♡</button><button className="watchActionIcon" onClick={e=>{e.stopPropagation();save()}} aria-label={saved?"Remove from saved":"Save"} title={saved?"Remove from saved":"Save"}>＋</button><button className="watchActionIcon" onClick={e=>{e.stopPropagation();share()}} aria-label="Share" title="Share">↗</button></div>
+
     <details className="watchDescription" open><summary>About this video</summary><p>{video.desc}</p><span>{Number(video.youtubeLikeCount||0).toLocaleString()} YouTube likes · {Number(video.commentCount||0).toLocaleString()} comments · {video.hasCaptions?"Captions available":"Captions not indicated"}</span></details>
     <div className="watchNotice">Comments stay on YouTube. Kivora does not add a separate comment system or paid comment API usage here.</div>
    </article>
@@ -461,8 +470,28 @@ function Premium({user,onNotice,owner=false}){
  const [loading,setLoading]=useState(false);
  const liveRef=useRef(true);
  useEffect(()=>()=>{liveRef.current=false},[]);
- async function checkout(){if(owner){onNotice("Owner access: Kivora Pro is free for this account.");return}if(!user||user.isAnonymous){onNotice("Connect Google before purchasing Pro.");return}setLoading(true);onNotice("Opening secure checkout…");setTimeout(()=>{if(!liveRef.current)return;setLoading(false);onNotice("Checkout endpoint is not configured yet. Add the server-side Flutterwave verification before accepting payment.");},500)}
- return <section className="panel pro"><small>KIVORA PRO</small><h1>More room for the stories you love.</h1><p><b>Pricing is shown in USD with a Naira equivalent for clarity.</b> The exact Pro amount is configured by the server before Flutterwave checkout. Pro is designed around convenience: translated caption controls where the embedded source provides captions, richer collections and an ad-reduced Kivora experience.</p><div className="proGrid"><div><b>Free</b><span>Core discovery · saved videos · original/source captions when available</span></div><div><b>Pro</b><span>Translated caption controls · expanded collections · fewer Kivora ads</span></div></div><button className="primary" onClick={checkout} disabled={loading}>{loading?"Opening…":owner?"Pro enabled for owner":"Continue to secure checkout"}</button><p className="tiny">{owner?"Owner billing bypass is enabled for the configured Kivora owner account.":"Payment is only granted after server-side verification. No client-side “paid” flag unlocks Pro."}</p></section>
+ async function checkout(){
+  if(owner){onNotice("Owner access: Kivora Pro is free for this account.");return;}
+  if(!user||user.isAnonymous){onNotice("Connect Google before purchasing Pro.");return;}
+  setLoading(true);
+  onNotice("Opening secure checkout…");
+  setTimeout(()=>{
+   if(!liveRef.current)return;
+   setLoading(false);
+   onNotice("Checkout endpoint is not configured yet. Add the server-side Flutterwave verification before accepting payment.");
+  },500);
+ }
+ const benefits=[
+  "YouTube caption controls when the source video provides captions",
+  "Subtitle language selection using the embedded YouTube player",
+  "Kivora's translated-caption preference where YouTube provides that track",
+  "Saved videos and expanded personal collections",
+  "Ad-reduced Kivora browsing experience",
+  "Full-screen and landscape playback controls",
+  "Faster access to related action-movie recommendations",
+  "Future Pro-only Kivora features as they are released"
+ ];
+ return <section className="panel pro"><small>KIVORA PRO</small><h1>More control over your movie experience.</h1><p><b>Pro features are listed clearly before payment.</b> Subtitle behavior still depends on what YouTube makes available for each source video. Kivora does not download or re-host the video's captions.</p><div className="proPriceBox"><b>Pro access</b><span>USD price is configured server-side with a Naira equivalent shown before checkout.</span><span>Payment is verified server-side through Flutterwave before Pro is granted.</span></div><div className="proBenefits"><h2>What you get with Pro</h2><ul>{benefits.map(x=><li key={x}><span className="proCheck">✓</span><span>{x}</span></li>)}</ul></div><div className="proGrid"><div><b>Free</b><span>Core discovery, FYP, related videos, saved-video basics and standard YouTube playback.</span></div><div><b>Pro</b><span>Expanded Kivora convenience features, caption-language controls and reduced Kivora advertising.</span></div></div><button className="primary" onClick={checkout} disabled={loading}>{loading?"Opening…":owner?"Pro enabled for owner":"Continue to secure checkout"}</button><p className="tiny">{owner?"Owner billing bypass is enabled for the configured Kivora owner account.":"No client-side paid flag unlocks Pro. The server must verify payment first."}</p></section>
 }
 
 function AdStudio({owner=false}){

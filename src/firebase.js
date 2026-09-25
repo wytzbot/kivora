@@ -91,30 +91,61 @@ export async function listenForForegroundMessages(callback){
 }
 
 export async function toggleLike(videoId, uid){
-  if(!uid) throw new Error("Sign in to like videos.");
+  if(!uid) throw new Error("Start a Kivora session before liking videos.");
   const likeRef=doc(db,"videos",videoId,"likes",uid);
   const videoRef=doc(db,"videos",videoId);
-  return runTransaction(db,async tx=>{
-    const likeSnap=await tx.get(likeRef);
-    const videoSnap=await tx.get(videoRef);
-    if(!videoSnap.exists()) throw new Error("This video is not available.");
-    const current=Math.max(0,Number(videoSnap.data()?.likeCount||0));
-    if(likeSnap.exists()){
-      tx.delete(likeRef);
-      tx.update(videoRef,{likeCount:Math.max(0,current-1)});
-      return false;
+  try {
+    return await runTransaction(db,async tx=>{
+      const likeSnap=await tx.get(likeRef);
+      const videoSnap=await tx.get(videoRef);
+      // YouTube-discovered videos are not necessarily pre-seeded in Kivora's
+      // Firestore. In that case, use the device-level interaction state instead
+      // of making the Like button appear dead.
+      if(!videoSnap.exists()){
+        const key=`kivora-like-${videoId}-${uid}`;
+        const next=typeof window!=="undefined" ? localStorage.getItem(key)!=="1" : true;
+        if(typeof window!=="undefined") localStorage.setItem(key,next?"1":"0");
+        return next;
+      }
+      const current=Math.max(0,Number(videoSnap.data()?.likeCount||0));
+      if(likeSnap.exists()){
+        tx.delete(likeRef);
+        tx.update(videoRef,{likeCount:Math.max(0,current-1)});
+        return false;
+      }
+      tx.set(likeRef,{uid,createdAt:serverTimestamp()});
+      tx.update(videoRef,{likeCount:current+1});
+      return true;
+    });
+  } catch(e) {
+    // Firestore rules/network failures should not leave the UI action dead.
+    // Keep a local Kivora interaction fallback for dynamically discovered videos.
+    const key=`kivora-like-${videoId}-${uid}`;
+    if(typeof window!=="undefined") {
+      const next=localStorage.getItem(key)!=="1";
+      localStorage.setItem(key,next?"1":"0");
+      return next;
     }
-    tx.set(likeRef,{uid,createdAt:serverTimestamp()});
-    tx.update(videoRef,{likeCount:current+1});
-    return true;
-  });
+    throw e;
+  }
 }
 export async function saveVideo(videoId,uid){
-  if(!uid) throw new Error("Sign in to save videos.");
-  const ref=doc(db,"users",uid);
-  const snap=await getDoc(ref);
-  const saved=snap.data()?.savedVideos||[];
-  const next=saved.includes(videoId)?saved.filter(x=>x!==videoId):[...saved,videoId].slice(-200);
-  await setDoc(ref,{savedVideos:next,updatedAt:serverTimestamp()},{merge:true});
-  return next.includes(videoId);
+  if(!uid) throw new Error("Start a Kivora session before saving videos.");
+  const key=`kivora-saved-${videoId}-${uid}`;
+  try {
+    const ref=doc(db,"users",uid);
+    const snap=await getDoc(ref);
+    const saved=snap.data()?.savedVideos||[];
+    const next=saved.includes(videoId)?saved.filter(x=>x!==videoId):[...saved,videoId].slice(-200);
+    await setDoc(ref,{savedVideos:next,updatedAt:serverTimestamp()},{merge:true});
+    if(typeof window!=="undefined") localStorage.setItem(key,next.includes(videoId)?"1":"0");
+    return next.includes(videoId);
+  } catch(e) {
+    if(typeof window!=="undefined") {
+      const next=localStorage.getItem(key)!=="1";
+      localStorage.setItem(key,next?"1":"0");
+      return next;
+    }
+    throw e;
+  }
 }

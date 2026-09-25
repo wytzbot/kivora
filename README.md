@@ -202,3 +202,9 @@ Tapping a FYP video opens a dedicated watch page with the official YouTube playe
 - Device Back uses browser history so leaving a watch page returns to the previous Kivora page instead of treating the watch page as a terminal screen.
 - Advertising prices show USD plus a Naira display equivalent. The current UI reference is ₦1,330 per $1, so $1.99 ≈ ₦2,647 and $2.99 ≈ ₦3,977. The exchange rate is configurable server-side with `KIVORA_USD_NGN_RATE`.
 - YouTube's embedded player still controls its own native progress-bar color; the official API currently supports only `red` or `white`, so Kivora does not overlay the iframe to fake a brand-colored YouTube control.
+
+## Subtitle / translation behavior
+
+Kivora does **not** need the Google Cloud Translation API just to show YouTube's own captions or ask the embedded YouTube player for a preferred caption language. Kivora uses YouTube's supported `cc_load_policy` and `cc_lang_pref` player parameters. If YouTube has an original or translated caption track for the selected video, the player can display it; if not, Kivora cannot manufacture a subtitle track for that third-party video.
+
+Google Cloud Translation API is only needed if Kivora itself wants to translate arbitrary text/transcripts. That requires a separate translation service and billing/quota setup. It does **not** automatically inject translated subtitles into arbitrary YouTube embeds. YouTube's Data API caption download/translation endpoints require authorization tied to videos the authenticated user has permission to edit, so Kivora should not use them to pull captions from unrelated creators' videos.
