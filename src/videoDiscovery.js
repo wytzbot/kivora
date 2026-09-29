@@ -1,6 +1,5 @@
-// Kivora discovery policy: only action-movie-like results are eligible for the organic FYP.
-// This is intentionally strict so generic YouTube entertainment (music, vlogs, recaps, etc.)
-// does not leak into the movie feed.
+// Kivora discovery policy: only eligible short-form videos are allowed into the organic FYP.
+// The server performs the authoritative duration filter; this client-side check is a second guard.
 const MIN_RECOMMENDATION_RATING = 2.5;
 const MIN_CONFIDENT_RATINGS = 5;
 
@@ -44,18 +43,22 @@ const MOVIE_PATTERNS = [
 
 export function isLikelySpam(item) {
   const text = `${item?.title || ''} ${item?.description || ''} ${item?.channelTitle || ''}`;
-  const shortForMovieFeed = Number(item?.durationSeconds || 0) > 0 && Number(item?.durationSeconds || 0) < 40 * 60;
-  return shortForMovieFeed || EXCLUDED_PATTERNS.some(re => re.test(text));
+  const seconds = Number(item?.durationSeconds || 0);
+  const blocked = [
+    /telegram/i, /whatsapp\s*group/i, /free\s*download/i, /cracked/i,
+    /mod\s*apk/i, /pornography/i, /\bxxx\b/i
+  ].some(re => re.test(text));
+  return blocked || !(seconds > 0 && seconds <= 180);
 }
 
-export function isLikelyActionMovie(item) {
-  if (!item || isLikelySpam(item)) return false;
-  const text = `${item?.title || ''} ${item?.description || ''}`;
-  const action = ACTION_PATTERNS.some(re => re.test(text));
-  const movie = MOVIE_PATTERNS.some(re => re.test(text));
-  // Require an explicit action signal, or a strong full-movie/full-film signal.
-  // This deliberately rejects generic vlogs, music, celebrity and travel content.
-  return action && movie || /\bfull\s*(movie|film)\b/i.test(text);
+export function isEligibleShort(item) {
+  if (!item) return false;
+  const seconds = Number(item?.durationSeconds || 0);
+  const width = Number(item?.embedWidth || item?.player?.embedWidth || 0);
+  const height = Number(item?.embedHeight || item?.player?.embedHeight || 0);
+  const publishedAt = String(item?.publishedAt || item?.snippet?.publishedAt || '');
+  const uploadedAfterShortsRule = publishedAt && new Date(publishedAt).getTime() >= Date.UTC(2024,9,15);
+  return seconds > 0 && seconds <= 180 && width > 0 && height > 0 && width <= height && uploadedAfterShortsRule && !isLikelySpam(item);
 }
 
 export function effectiveOriginality(itemOrAverage=3, ratingCount=0) {
@@ -69,7 +72,7 @@ export function effectiveOriginality(itemOrAverage=3, ratingCount=0) {
 }
 
 export function canRecommend(item) {
-  if (!isLikelyActionMovie(item)) return false;
+  if (!isEligibleShort(item)) return false;
   const count=Number(item?.ratingCount||0);
   if (count < MIN_CONFIDENT_RATINGS) return true;
   return effectiveOriginality(item?.ratingAverage,item?.ratingCount) >= MIN_RECOMMENDATION_RATING;

@@ -1,7 +1,7 @@
 import React,{useEffect,useRef,useState} from "react";
 import {createRoot} from "react-dom/client";
 import "./styles.css";
-import { isLikelySpam, effectiveOriginality, canRecommend } from "./videoDiscovery";
+import { isLikelySpam, effectiveOriginality, canRecommend, isEligibleShort } from "./videoDiscovery";
 import {
  auth,db,startAnonymousSession,signInWithGoogle,finishGoogleRedirect,onAuthStateChanged,
  enablePushNotifications,toggleLike,saveVideo,logOut,getProEntitlement
@@ -32,6 +32,8 @@ function normalizeVideo(item){
   youtubeLikeCount:Number(item?.statistics?.likeCount||0),
   commentCount:Number(item?.statistics?.commentCount||0),
   durationSeconds:Number(item?.contentDetails?.durationSeconds||0),
+  embedWidth:Number(item?.player?.embedWidth||0),
+  embedHeight:Number(item?.player?.embedHeight||0),
   hasCaptions:String(item?.contentDetails?.caption||"false")==="true",
   engagementScore:Number(item?.engagementScore||0)
  };
@@ -103,6 +105,29 @@ function App(){
  },[]);
 
  useEffect(()=>{
+   const params=new URLSearchParams(window.location.search);
+   const payment=params.get("payment");
+   const campaignId=params.get("campaignId");
+   const transactionId=params.get("transaction_id");
+   if(payment!=="campaign"||!campaignId||!transactionId)return;
+   let cancelled=false;
+   (async()=>{
+     try{
+       const u=auth.currentUser;
+       if(!u||u.isAnonymous)return;
+       const token=await u.getIdToken();
+       const r=await fetch("/api/ad-campaign?action=verify",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${token}`},body:JSON.stringify({campaignId,transactionId})});
+       const d=await r.json();
+       if(cancelled)return;
+       setNotice(r.ok&&d.verified?"Payment verified. Your sponsored Short is now ready for delivery.":(d.error||"Payment is still pending."));
+       window.history.replaceState({},"",window.location.pathname);
+     }catch(e){
+       if(!cancelled)setNotice("Payment verification could not be completed yet. You can return to Advertise and retry verification.");
+     }
+   })();
+   return()=>{cancelled=true};
+ },[user]);
+ useEffect(()=>{
    const apply=()=>{const dark=theme==="dark"||(theme==="system"&&window.matchMedia?.("(prefers-color-scheme: dark)").matches);document.documentElement.dataset.theme=dark?"dark":"light";document.documentElement.style.colorScheme=dark?"dark":"light";};
    apply(); localStorage.setItem("kivora-theme",theme);
    const mq=window.matchMedia?.("(prefers-color-scheme: dark)"); const fn=()=>theme==="system"&&apply(); mq?.addEventListener?.("change",fn); return()=>mq?.removeEventListener?.("change",fn);
@@ -127,7 +152,7 @@ function App(){
    (async()=>{
      try{
        const snap=await getDocs(fsQuery(collection(db,"campaigns"),where("status","==","ready"),limit(12)));
-       if(live)setSponsored(snap.docs.map(d=>({id:d.id,...d.data()})).filter(c=>c.moderationStatus==="approved"&&c.assetStatus==="verified"&&c.paymentStatus==="verified"&&Number(c.remainingImpressions??1)>0));
+       if(live)setSponsored(snap.docs.map(d=>({id:d.id,...d.data()})).filter(c=>c.format==="video"&&c.moderationStatus==="approved"&&c.assetStatus==="verified"&&c.paymentStatus==="verified"&&Number(c.remainingImpressions??1)>0));
      }catch{if(live)setSponsored([])}
    })();
    return()=>{live=false};
@@ -213,8 +238,8 @@ function App(){
  useEffect(()=>{
    const base=window.location.origin;
    const canonical=tab==="watch"&&selectedVideo?`${base}/?watch=${encodeURIComponent(selectedVideo.id)}`:`${base}/`;
-   const title=tab==="watch"&&selectedVideo?`${selectedVideo.title} | Kivora`:category!=="all"?`${category[0].toUpperCase()+category.slice(1)} Action Movies | Kivora`:"Kivora | Action Movies & Long-Form Entertainment";
-   const description=tab==="watch"&&selectedVideo?`Watch ${selectedVideo.title} on Kivora through the official YouTube player. Discover more long-form action movies and related videos.`:"Kivora is an action-movie discovery platform for long-form entertainment, with Hollywood, Chinese, Korean, Japanese, Nollywood and other action-movie categories.";
+   const title=tab==="watch"&&selectedVideo?`${selectedVideo.title} | Kivora`:category!=="all"?`${category[0].toUpperCase()+category.slice(1)} Shorts | Kivora`:"Kivora | Shorts";
+   const description=tab==="watch"&&selectedVideo?`Watch ${selectedVideo.title} on Kivora through the official YouTube player. Discover more Shorts and related videos.`:"Kivora is a Shorts-first entertainment discovery platform powered by official YouTube embeds.";
    document.title=title;
    const setMeta=(selector,attrs,content)=>{let el=document.head.querySelector(selector);if(!el){el=document.createElement("meta");Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,v));document.head.appendChild(el);}el.setAttribute("content",content)};
    setMeta('meta[name="description"]',{name:"description"},description);
@@ -230,7 +255,7 @@ function App(){
    let link=document.head.querySelector('link[rel="canonical"]');if(!link){link=document.createElement("link");link.rel="canonical";document.head.appendChild(link)}link.href=canonical;
    let schema=document.getElementById("kivora-seo-schema");if(!schema){schema=document.createElement("script");schema.id="kivora-seo-schema";schema.type="application/ld+json";document.head.appendChild(schema)}
    const baseGraph=[
-    {"@type":"WebSite","@id":`${base}/#website`,url:base+"/",name:"Kivora",description:"Action-movie and long-form entertainment discovery platform."},
+    {"@type":"WebSite","@id":`${base}/#website`,url:base+"/",name:"Kivora",description:"Shorts-first entertainment discovery platform."},
     {"@type":"Organization","@id":`${base}/#organization`,name:"Kivora",url:base+"/"}
    ];
    if(tab==="watch"&&selectedVideo){
@@ -300,11 +325,11 @@ function App(){
       ["bollywood","Bollywood"],["chinese","Chinese"],["korean","Korean"],["japanese","Japanese"],
       ["nollywood","Nollywood"],["southindian","South Indian"],["thai","Thai"],["indonesian","Indonesian"]
     ].map(([key,label])=><button key={key} className={category===key?"active":""} onClick={()=>{setCategory(key);setQuery("")}}>{label}</button>)}</nav>
-    <section className="discoverTools"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search movies, shows, creators…" aria-label="Search Kivora videos"/><span>{query?"Search results":"Action movies ranked using engagement and viewer ratings."}</span></section>
+    <section className="discoverTools"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search movies, shows, creators…" aria-label="Search Kivora videos"/><span>{query?"Search results":"Shorts ranked using engagement and viewer ratings."}</span></section>
     {videoLoading&&<section className="sourceNote"><b>Finding videos…</b><p>Kivora is loading live YouTube discovery results.</p></section>}
     {videoError&&<section className="sourceNote"><b>Video discovery notice</b><p>{videoError}</p>{query.trim()&&<button onClick={()=>setQuery("")}>Back to Discover</button>}</section>}
     <div className="feed">{(()=>{
-      const ranked=videos.filter(v=>{const r=ratings[v.id]||{};const item={...v,...r};return !isLikelySpam(item)&&(query.trim()?true:canRecommend(item));}).map(v=>{
+      const ranked=videos.filter(v=>{const r=ratings[v.id]||{};const item={...v,...r};return isEligibleShort(item)&&!isLikelySpam(item)&&(query.trim()?true:canRecommend(item));}).map(v=>{
         const r=ratings[v.id]||{};
         const viewerRating=effectiveOriginality(r.ratingAverage,r.ratingCount);
         const engagement=Number(v.engagementScore||0);
@@ -314,14 +339,14 @@ function App(){
       ranked.sort((a,b)=>category==="new"?new Date(b.publishedAt||0)-new Date(a.publishedAt||0):b.recScore-a.recScore);
       const cards=[];
       ranked.forEach((v,i)=>{
-        cards.push(<VideoCard key={v.id} video={v} user={user} onNotice={setNotice} isPro={premium} suggested={!query.trim() && category!=="new" && i<5} onOpen={openVideo}/>);
-        if(sponsored.length && (i===2 || (i>2 && (i-2)%5===0))){const ad=sponsored[Math.min(Math.floor(i/5),sponsored.length-1)];cards.push(<SponsoredCard key={`ad-${ad.id}-${i}`} campaign={ad} onNotice={setNotice}/>);}
+        cards.push(<ShortsPlayer key={v.id} video={v} onOpen={openVideo} onNotice={setNotice}/>);
+        if(sponsored.length && (i===3 || (i>3 && (i-3)%6===0))){const ad=sponsored[Math.min(Math.floor(i/6),sponsored.length-1)];const adVideo={id:ad.assetSource==="drive"?ad.assetId:extractYouTubeId(ad.assetId||ad.youtubeUrl||""),source:ad.assetSource||"youtube",assetId:ad.assetId,title:ad.title||"Sponsored Short",channelTitle:ad.brand||"Advertiser",durationSeconds:Number(ad.durationSeconds||ad.duration||30),site:ad.site||"",destinationName:ad.destinationName||ad.brand||"",siteIcon:ad.siteIcon||"",promotionType:ad.promotionType||"short"};if(adVideo.id)cards.push(<ShortsPlayer key={`ad-${ad.id}-${i}`} video={adVideo} onNotice={setNotice} ad playbackKey={ad.id} campaignId={ad.id}/>);}
       });
       if(!cards.length&&!videoLoading)cards.push(<section className="emptyState" key="empty"><h3>No videos to show</h3><p>Try another category or search term.</p></section>);
       return cards;
     })()}</div>
     <div ref={feedSentinelRef} className="feedSentinel" aria-live="polite">{loadingMore&&<><span className="feedSpinner"/>Finding more movies…</>}{!loadingMore&&!hasMore&&videos.length>0&&<span>You've reached the end of the currently available results.</span>}</div>
-    <details className="sourceNote sourceDetails"><summary><b>How Kivora's feed works</b></summary><p>Suggested videos combine public YouTube engagement signals with Kivora viewer ratings. New sorts by publication date. Categories focus on action movies across major film industries. Recaps, explainers, reviews, reactions, trailers, Shorts and similar non-movie results are filtered out. Sponsored placements are clearly labelled and inserted into the same FYP flow as other content.</p></details>
+    <details className="sourceNote sourceDetails"><summary><b>How Kivora's feed works</b></summary><p>Suggested videos combine public YouTube engagement signals with Kivora viewer ratings. New sorts by publication date. The feed is Shorts-first: only eligible videos up to 180 seconds are shown. Long-form videos are excluded server-side. Sponsored placements are video-only and clearly labelled. Sponsored placements are clearly labelled and inserted into the same FYP flow as other content.</p></details>
     <details className="sourceNote sourceDetails"><summary><b>Subtitles & language</b></summary><p>Kivora can use the official YouTube player's caption system when a source video provides captions. You can turn captions on/off and choose a preferred caption language. YouTube decides which original or translated caption tracks are available; Kivora does not download or re-host caption files.</p></details>
     <details className="sourceNote sourceDetails"><summary><b>How Kivora gets videos</b></summary><p>Kivora uses official YouTube video IDs and metadata, then plays the creator's video through YouTube's official embedded player. The original source, creator and YouTube controls remain attributable to the source platform.</p><button onClick={()=>go("creators")}>Read our creator & rights policy →</button></details>
    </>}
@@ -329,7 +354,7 @@ function App(){
    {tab==="history"&&<section className="panel"><h1>Recently watched</h1><p>Your local viewing history will appear here. Kivora keeps this separate from YouTube's own view history.</p></section>}
    {tab==="account"&&<section className="panel"><h1>Your Kivora account</h1><p>{signedIn?"Google is connected. Your saved Kivora activity can sync across devices.":"You're using a guest session on this device."}</p>{!signedIn&&<button className="primary" onClick={google}>Connect Google</button>}</section>}
    {tab==="premium"&&<Premium user={user} onNotice={setNotice} owner={owner}/>}
-   {tab==="ads"&&(signedIn?<AdStudio owner={owner}/>:<section className="panel"><h1>Advertise with Kivora</h1><p>Sign in with Google before creating a campaign.</p><button className="primary" onClick={google}>Continue with Google</button></section>)}
+   {tab==="ads"&&(signedIn?<AdStudio user={user} owner={owner}/>:<section className="panel"><h1>Advertise with Kivora</h1><p>Sign in with Google before creating a campaign.</p><button className="primary" onClick={google}>Continue with Google</button></section>)}
    {tab==="faqs"?<FAQs/>:["about","privacy","terms","disclaimer","creators","help"].includes(tab)?<Legal page={tab}/>:null}
   </main>
   <footer>Kivora · Independent entertainment discovery · Source attribution matters.</footer>
@@ -461,30 +486,85 @@ function YouTubePlayer({video,isPro,onNotice,compact=false}){
  </>;
 }
 
-function VideoCard({video,user,onNotice,isPro=false,suggested=false,onOpen}){
- const [liked,setLiked]=useState(false),[likes,setLikes]=useState(0),[saved,setSaved]=useState(false);
- useEffect(()=>{if(!user)return;const key=`kivora-like-${video.id}-${user.uid}`;setLiked(localStorage.getItem(key)==="1");},[user,video.id]);
- async function like(e){e.stopPropagation();const uid=user?.uid||"guest";try{const next=user?await toggleLike(video.id,user.uid):(localStorage.getItem(`kivora-like-${video.id}-guest`)!=="1");setLiked(next);localStorage.setItem(`kivora-like-${video.id}-${uid}`,next?"1":"0");setLikes(x=>Math.max(0,x+(next?1:-1)));if(!user)onNotice("Liked on this device. Connect Google to sync your Kivora activity.");}catch(e2){onNotice(e2.message)}}
- async function save(e){e.stopPropagation();const uid=user?.uid||"guest";try{const next=user?await saveVideo(video.id,user.uid):(localStorage.getItem(`kivora-saved-${video.id}-guest`)!=="1");setSaved(next);localStorage.setItem(`kivora-saved-${video.id}-${uid}`,next?"1":"0");if(!user)onNotice("Saved on this device. Connect Google to sync your Kivora activity.");}catch(e2){onNotice(e2.message)}}
- function share(e){e.stopPropagation();const url=`${location.origin}/?watch=${encodeURIComponent(video.id)}`;if(navigator.share){navigator.share({title:video.title,url}).catch(err=>{if(err?.name!=="AbortError")onNotice("Share was cancelled or unavailable.")});return}if(navigator.clipboard?.writeText){navigator.clipboard.writeText(url).then(()=>onNotice("Kivora link copied.")).catch(()=>onNotice("Copy the page link to share."));return}onNotice("Copy the page link to share.")}
- return <article className="videoCard feedVideoCard" onClick={()=>onOpen?.(video)} role="link" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();onOpen?.(video)}}}>
-   <div className="playerWrap isThumbnail">
-    <div className="thumbnailButton" aria-label={`Open ${video.title}`}>
-      <img src={video.thumb} alt="" loading="lazy"/><span className="thumbShade"/><span className="playCircle">▶</span>
-      {video.durationSeconds>0&&<span className="durationBadge">{formatDuration(video.durationSeconds)}</span>}
-    </div>
-   </div>
-   <div className="videoBody">
-    <div className="videoMetaLine"><div className="eyebrow">{video.lang}</div>{suggested&&<span className="suggestedBadge">SUGGESTED</span>}</div>
-    <h2>{video.title}</h2>
-    <div className="channelLine"><span className="channelAvatar">{(video.channelTitle||"Y").slice(0,1).toUpperCase()}</span><span><b>{video.channelTitle||"YouTube"}</b><small>{Number(video.viewCount||0).toLocaleString()} views{video.publishedAt?` · ${new Date(video.publishedAt).toLocaleDateString()}`:""}</small></span></div>
-    <details className="videoInfo" onClick={e=>e.stopPropagation()}><summary>About this video</summary><p>{video.desc}</p><span>{Number(video.youtubeLikeCount||0).toLocaleString()} YouTube likes · {Number(video.commentCount||0).toLocaleString()} comments · {video.hasCaptions?"Captions available":"Captions not indicated"}</span></details>
-    <div className="actionRow compactActions" onClick={e=>e.stopPropagation()}><button onClick={like}>♡ <span className="actionText">{liked?"Liked":"Like"}</span>{likes?` ${likes}`:""}</button><button onClick={save}>＋ <span className="actionText">{saved?"Saved":"Save"}</span></button><button onClick={share}>↗ <span className="actionText">Share</span></button></div>
-    <div className="captionHint">Tap to open the full Kivora watch page.</div>
-   </div>
- </article>
+
+function extractDriveId(value=""){
+ const s=String(value||"").trim();
+ if(/^[A-Za-z0-9_-]{20,}$/.test(s)) return s;
+ const m=s.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)([A-Za-z0-9_-]+)/i);
+ return m?.[1]||"";
 }
 
+function ShortsPlayer({video,onOpen,onNotice,ad=false,playbackKey="",campaignId=""}){
+ const box=useRef(null),player=useRef(null),visibleRef=useRef(false),countedRef=useRef(false),impressionTimer=useRef(null),exposureKey=useRef(crypto.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`);
+ const [ready,setReady]=useState(false),[playing,setPlaying]=useState(false),[liked,setLiked]=useState(false),[saved,setSaved]=useState(false),[visibleRatio,setVisibleRatio]=useState(0);
+ const driveId=video.source==="drive"?video.id:extractDriveId(video.assetId||"");
+ const isDrive=Boolean(driveId);
+ const playbackMode=ad?"sponsored":"organic";
+ const id=`yt-short-${String(video.id).replace(/[^A-Za-z0-9_-]/g,"")}-${playbackKey||playbackMode}`;
+
+ async function reportQualifiedImpression(){
+   if(!ad||!campaignId||countedRef.current)return;
+   const u=auth.currentUser;
+   countedRef.current=true;
+   try{
+     const headers={'Content-Type':'application/json'};
+     if(u&&!u.isAnonymous) headers.Authorization=`Bearer ${await u.getIdToken()}`;
+     const res=await fetch('/api/ad-impression',{method:'POST',headers,body:JSON.stringify({campaignId,impressionKey:`${campaignId}-${exposureKey.current}`,viewerKey:`${u?.uid||'anonymous'}-${exposureKey.current}`,secondsViewed:2,visibleRatio:Math.max(.5,visibleRatio),source:isDrive?'drive':'youtube'})});
+     if(!res.ok){countedRef.current=false;return;}
+   }catch{countedRef.current=false;}
+ }
+ function armImpression(){
+   if(!ad||!campaignId||countedRef.current||impressionTimer.current)return;
+   impressionTimer.current=setTimeout(()=>{impressionTimer.current=null;if(visibleRef.current&&(isDrive||playing))reportQualifiedImpression()},2000);
+ }
+ function disarmImpression(){if(impressionTimer.current){clearTimeout(impressionTimer.current);impressionTimer.current=null}}
+
+ useEffect(()=>{
+   let cancelled=false;
+   if(isDrive){setReady(true);return()=>{cancelled=true;disarmImpression()};}
+   const start=()=>{
+     if(cancelled||!window.YT?.Player||!box.current||document.getElementById(id)?.dataset.loaded==="1")return;
+     const el=document.getElementById(id); if(!el)return;
+     el.dataset.loaded="1";
+     player.current=new window.YT.Player(id,{videoId:video.id,width:"100%",height:"100%",playerVars:{autoplay:0,controls:1,rel:0,playsinline:1,enablejsapi:1,iv_load_policy:3,origin:window.location.origin},events:{
+       onReady:()=>{if(cancelled)return;setReady(true);try{player.current.mute();if(visibleRef.current){player.current.playVideo();setPlaying(true)}}catch{}},
+       onStateChange:e=>{if(window.YT?.PlayerState&&e.data===window.YT.PlayerState.PLAYING){setPlaying(true);armImpression()}if(window.YT?.PlayerState&&[window.YT.PlayerState.PAUSED,window.YT.PlayerState.ENDED].includes(e.data)){setPlaying(false);disarmImpression()}},
+       onAutoplayBlocked:()=>onNotice?.("YouTube blocked automatic playback. Tap the video to start it.")
+     }});
+   };
+   loadYouTubeApi(start);
+   return()=>{cancelled=true;disarmImpression();try{player.current?.destroy()}catch{}player.current=null};
+ },[video.id,id,isDrive,campaignId]);
+
+ useEffect(()=>{
+   const node=box.current;if(!node)return;
+   const observer=new IntersectionObserver(entries=>{
+     const entry=entries[0];if(!entry)return;
+     const ratio=Number(entry.intersectionRatio||0);setVisibleRatio(ratio);
+     const active=entry.isIntersecting&&ratio>=.72;visibleRef.current=active;
+     if(!player.current||!ready){if(active&&isDrive)armImpression();else if(!active)disarmImpression();return;}
+     try{if(active){player.current.mute();player.current.playVideo();setPlaying(true);armImpression()}else{player.current.pauseVideo();setPlaying(false);disarmImpression()}}catch{}
+   },{threshold:[0,.5,.72,.9],rootMargin:'0px'});
+   observer.observe(node);return()=>{observer.disconnect();disarmImpression()};
+ },[ready,isDrive]);
+
+ async function share(){const url=`${window.location.origin}${window.location.pathname}?watch=${encodeURIComponent(video.id)}`;try{if(navigator.share)await navigator.share({title:video.title,text:`Watch ${video.title} on Kivora`,url});else{await navigator.clipboard?.writeText(url);onNotice?.("Short link copied.")}}catch{}}
+ function toggleLike(){setLiked(v=>!v);onNotice?.(liked?"Like removed":"Liked")}
+ function toggleSave(){setSaved(v=>!v);onNotice?.(saved?"Removed from saved":"Saved to Kivora")}
+ function activate(){try{if(isDrive)return;if(!player.current)return;player.current.unMute();player.current.playVideo();setPlaying(true)}catch{onOpen?.(video)}}
+ const embed= isDrive ? `https://drive.google.com/file/d/${encodeURIComponent(driveId)}/preview` : "";
+ return <article className={`shortCard ${ad?"shortAdCard":""}`} ref={box} onDoubleClick={()=>!ad&&toggleLike()}>
+   <div className="shortPlayer" onClick={()=>{if(!playing&&!isDrive)activate()}}>
+     {isDrive?<iframe className="shortYT shortDriveFrame" src={embed} title={video.title||"Sponsored video"} allow="autoplay; fullscreen" allowFullScreen onLoad={()=>{setReady(true);if(visibleRef.current)armImpression()}}/>:<div id={id} className="shortYT"/>}
+     <div className="shortTopline"><span>{ad?"SPONSORED":"FOR YOU"}</span><small>{isDrive?(ready?"Playing":"Loading"):(playing?"Playing":"Tap to play")}</small></div>
+     {!playing&&!isDrive&&<button className="shortPlayOverlay" onClick={e=>{e.stopPropagation();activate()}} aria-label="Play Short">▶</button>}
+     <div className="shortGradient" aria-hidden="true"/>
+     <div className="shortRail" onClick={e=>e.stopPropagation()}>{!ad&&<><button className={`shortRailButton ${liked?"active":""}`} onClick={toggleLike} aria-label={liked?"Unlike":"Like"}><span>♥</span><small>{liked?"Liked":"Like"}</small></button><button className={`shortRailButton ${saved?"active":""}`} onClick={toggleSave} aria-label={saved?"Unsave":"Save"}><span>＋</span><small>{saved?"Saved":"Save"}</small></button></>}<button className="shortRailButton" onClick={share} aria-label="Share"><span>↗</span><small>Share</small></button><button className="shortRailButton" onClick={()=>onOpen?.(video)} aria-label="Open video"><span>•••</span><small>More</small></button></div>
+     <div className="shortBottomInfo" onClick={e=>e.stopPropagation()}><div className="shortCreator"><span className="shortAvatar">{(video.channelTitle||"Y").slice(0,1).toUpperCase()}</span><b>{video.channelTitle||"YouTube"}</b>{!ad&&<button onClick={()=>onOpen?.(video)}>View</button>}</div><h2>{video.title}</h2><p>{formatDuration(video.durationSeconds)}{video.desc?` · ${video.desc.slice(0,120)}${video.desc.length>120?"…":""}`:""}</p>{ad&&<div className="shortAdMeta"><span>Sponsored video · Kivora ad</span>{isDrive?<small>Hosted by Google Drive · Kivora does not store the file</small>:<small>YouTube playback · YouTube may independently serve ads inside its player</small>}</div>}</div>
+   </div>
+   {ad&&video.promotionType==="app"&&video.site&&<a className="shortDestinationBanner" href={video.site} target="_blank" rel="noopener noreferrer"><span className="destinationIcon"><img src={video.siteIcon||`https://www.google.com/s2/favicons?domain=${encodeURIComponent(video.site)}&sz=128`} alt="" onError={e=>{e.currentTarget.style.display="none"}}/></span><span className="destinationCopy"><b>{video.destinationName||video.channelTitle||"Visit advertiser"}</b><small>{video.site.replace(/^https?:\/\//i,"").replace(/\/$/,"")}</small></span><strong>Open ↗</strong></a>}
+ </article>
+}
 function VideoWatchPage({video,relatedVideos,sponsored,user,onNotice,isPro,onBack,onOpenVideo}){
  const related=relatedVideos.filter(v=>v.id!==video.id&&!isLikelySpam(v)).slice(0,10);
  const [liked,setLiked]=useState(false),[likes,setLikes]=useState(0),[saved,setSaved]=useState(false);
@@ -493,7 +573,7 @@ function VideoWatchPage({video,relatedVideos,sponsored,user,onNotice,isPro,onBac
  async function save(){const uid=user?.uid||"guest";try{const next=user?await saveVideo(video.id,user.uid):(localStorage.getItem(`kivora-saved-${video.id}-guest`)!=="1");setSaved(next);localStorage.setItem(`kivora-saved-${video.id}-${uid}`,next?"1":"0");if(!user)onNotice("Saved on this device. Connect Google to sync your Kivora activity.");}catch(e){onNotice(e.message)}}
  async function share(){const url=`${location.origin}/?watch=${encodeURIComponent(video.id)}`;try{if(navigator.share){await navigator.share({title:video.title,url});return}if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(url);onNotice("Kivora link copied.");return}throw new Error()}catch(e){if(e?.name!=="AbortError")onNotice("Copy the page link to share.")}}
  return <section className="watchPage">
-   <div className="watchTop"><button className="backBtn" onClick={onBack}>← Back to FYP</button><span className="watchSource">Kivora · YouTube</span></div>
+   <div className="watchTop"><button className="backBtn" onClick={onBack}>← Back to FYP</button><span className="watchSource">Organic video · YouTube player</span></div>
    <YouTubePlayer video={video} isPro={isPro} onNotice={onNotice}/>
     <div className="watchActions visible" aria-label="Video actions"><button className="watchActionIcon" onClick={e=>{e.stopPropagation();like()}} aria-label={liked?"Unlike":"Like"} title={liked?"Unlike":"Like"}>♡</button><button className="watchActionIcon" onClick={e=>{e.stopPropagation();save()}} aria-label={saved?"Remove from saved":"Save"} title={saved?"Remove from saved":"Save"}>＋</button><button className="watchActionIcon" onClick={e=>{e.stopPropagation();share()}} aria-label="Share" title="Share">↗</button></div>
    <article className="watchInfo">
@@ -505,7 +585,7 @@ function VideoWatchPage({video,relatedVideos,sponsored,user,onNotice,isPro,onBac
     <div className="watchNotice">Comments stay on YouTube. Kivora does not add a separate comment system or paid comment API usage here.</div>
    </article>
    <div className="relatedSection">
-    <div className="relatedHeading"><div><small>UP NEXT</small><h2>Related action movies</h2></div><span>{related.length} videos</span></div>
+    <div className="relatedHeading"><div><small>UP NEXT</small><h2>Related Shorts</h2></div><span>{related.length} videos</span></div>
     {related.length?related.map((v,i)=><React.Fragment key={v.id}><RelatedVideoCard video={v} onOpen={onOpenVideo}/>{sponsored.length&&((i+1)%4===0)?<SponsoredCard key={`watch-ad-${sponsored[Math.floor(i/4)%sponsored.length].id}-${i}`} campaign={sponsored[Math.floor(i/4)%sponsored.length]} onNotice={onNotice}/>:null}</React.Fragment>):<div className="emptyState"><h3>No related videos yet</h3><p>Go back to the FYP for more action-movie suggestions.</p></div>}
    </div>
  </section>
@@ -579,55 +659,62 @@ function Premium({user,onNotice,owner=false}){
  return <section className="panel pro"><small>KIVORA PRO</small><h1>More control over your movie experience.</h1><p><b>Pro features are listed clearly before payment.</b> Subtitle behavior still depends on what YouTube makes available for each source video. Kivora does not download or re-host the video's captions.</p><div className="proPriceBox"><b>Pro access</b><span>USD price is configured server-side with a Naira equivalent shown before checkout.</span><span>Payment is verified server-side through Flutterwave before Pro is granted.</span></div><div className="proBenefits"><h2>What you get with Pro</h2><ul>{benefits.map(x=><li key={x}><span className="proCheck">✓</span><span>{x}</span></li>)}</ul></div><div className="proGrid"><div><b>Free</b><span>Core discovery, FYP, related videos, saved-video basics and standard YouTube playback.</span></div><div><b>Pro</b><span>Expanded Kivora convenience features, caption-language controls and reduced Kivora advertising.</span></div></div><button className="primary" onClick={checkout} disabled={loading}>{loading?"Opening…":owner?"Pro enabled for owner":"Continue to secure checkout"}</button><p className="tiny">{owner?"Owner billing bypass is enabled for the configured Kivora owner account.":"No client-side paid flag unlocks Pro. The server must verify payment first."}</p></section>
 }
 
-function AdStudio({owner=false}){
- const [step,setStep]=useState("prep"),[format,setFormat]=useState(""),[status,setStatus]=useState(""),[submitting,setSubmitting]=useState(false);
- const [form,setForm]=useState({brand:"",title:"",description:"",assetId:"",site:"",country:"",targetImpressions:"1500",duration:"1"});
+function AdStudio({user,owner=false}){
+ const [step,setStep]=useState("prep"),[status,setStatus]=useState(""),[submitting,setSubmitting]=useState(false),[campaignId,setCampaignId]=useState(""),[myCampaigns,setMyCampaigns]=useState([]),[loadingCampaigns,setLoadingCampaigns]=useState(false);
+ const today=new Date().toISOString().slice(0,10);
+ const [form,setForm]=useState({promotionType:"short",brand:"",title:"",description:"",assetId:"",site:"",destinationName:"",siteIcon:"",country:"",targetImpressions:"1500",duration:"1",startDate:today});
  const update=(k,v)=>setForm(x=>({...x,[k]:v}));
- const choose=f=>{setFormat(f);setStep("form");setStatus("");};
- const isDriveId=v=>/^[A-Za-z0-9_-]{20,}$/.test(v.trim());
- const isYouTube=v=>/^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)[A-Za-z0-9_-]{6,}/i.test(v.trim());
- const BANNER_PRICE_PER_BLOCK=1.99;
- const VIDEO_PRICE_PER_BLOCK=2.99;
- const IMPRESSION_BLOCK=1500;
+ const IMPRESSION_BLOCK=1500, VIDEO_PRICE_PER_BLOCK=1.00;
  const days=Math.max(1,Math.min(90,Number(form.duration)||1));
  const targetImpressions=Math.max(0,Math.floor(Number(String(form.targetImpressions).replace(/[^0-9]/g,""))||0));
  const billableBlocks=targetImpressions>0?Math.ceil(targetImpressions/IMPRESSION_BLOCK):0;
  const billableImpressions=billableBlocks*IMPRESSION_BLOCK;
- const pricePerBlock=format==="video"?VIDEO_PRICE_PER_BLOCK:BANNER_PRICE_PER_BLOCK;
- const estimatedBill=owner?0:Number((billableBlocks*pricePerBlock).toFixed(2));
+ const estimatedBill=owner?0:Number((billableBlocks*VIDEO_PRICE_PER_BLOCK).toFixed(2));
+ const dailyImpressions=days?Math.ceil(billableImpressions/days):0;
+ const dailyBudget=days?Number((estimatedBill/days).toFixed(2)):0;
+ const startDate=form.startDate||today;
+ const endDate=(()=>{const d=new Date(`${startDate}T00:00:00`);if(Number.isNaN(d.getTime()))return startDate;d.setDate(d.getDate()+days-1);return d.toISOString().slice(0,10)})();
+ const destinationRequired=form.promotionType==="app";
+ async function refreshCampaigns(){
+  if(!user||user.isAnonymous)return;
+  setLoadingCampaigns(true);
+  try{const snap=await getDocs(fsQuery(collection(db,"campaigns"),where("advertiserId","==",user.uid),limit(20)));setMyCampaigns(snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>String(b.createdAt||"").localeCompare(String(a.createdAt||""))))}catch{setMyCampaigns([])}finally{setLoadingCampaigns(false)}
+ }
+ useEffect(()=>{refreshCampaigns()},[user?.uid]);
  function preflight(){
   const text=Object.values(form).join(" ").toLowerCase();
   const political=["vote","election","candidate","political party","campaign","ballot","president","governor","senator","politician","electoral"].some(x=>text.includes(x));
   const adult=["porn","pornography","xxx","escort","onlyfans","nude","nudes","adult content"].some(x=>text.includes(x));
   if(political)return "Rejected: political advertising is not permitted.";
   if(adult)return "Rejected: adult/sexually explicit advertising is not permitted.";
-  if(!/^https?:\/\//i.test(form.site.trim()))return "Rejected: enter a valid destination URL.";
   if(!form.brand.trim()||!form.title.trim())return "Rejected: brand and campaign title are required.";
-  if(!Number.isInteger(targetImpressions)||targetImpressions<1500)return "Rejected: enter at least 1,500 target impressions.";
-   if(targetImpressions>100000000)return "Rejected: target impressions cannot exceed 100,000,000.";
+  if(destinationRequired && !/^https?:\/\//i.test(form.site.trim()))return "Rejected: app/site promotion requires a valid destination URL.";
+  if(destinationRequired && !form.destinationName.trim())return "Rejected: add the app/site name shown on the destination banner.";
+  if(targetImpressions<1500)return "Rejected: enter at least 1,500 target impressions.";
+  if(targetImpressions>100000000)return "Rejected: target impressions cannot exceed 100,000,000.";
   if(!days||days>90)return "Rejected: campaign duration must be 1–90 days.";
-  if(format!=="video" && !isDriveId(form.assetId) && !/^https?:\/\//i.test(form.assetId))return "Rejected: use a Google Drive file ID or a permitted public image URL.";
-  if(format==="video" && !isDriveId(form.assetId) && !isYouTube(form.assetId))return "Rejected: video must be a Google Drive file ID or YouTube URL.";
-  if(format==="video" && isLikelySpam({title:form.title,description:form.description}))return "Rejected: campaign text triggered the anti-spam check.";
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate))return "Rejected: choose a valid start date.";
+  if(!/^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/)[A-Za-z0-9_-]{6,}/i.test(form.assetId.trim()) && !/^[A-Za-z0-9_-]{20,}$/.test(form.assetId.trim()) && !/^https?:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)[A-Za-z0-9_-]+/i.test(form.assetId.trim()))return "Rejected: video must be a YouTube URL/Shorts URL or a Google Drive video file ID/link.";
   return "PASS";
  }
- async function submit(e){e.preventDefault();if(submitting)return;setSubmitting(true);setStatus("");const result=preflight();if(result!=="PASS"){setStatus(result);setSubmitting(false);return;}setStatus(`Preflight passed. ${owner?"Owner billing bypass applies. No payment is required.":"Estimated bill: "+moneyUsdNgn(estimatedBill)+" for "+billableImpressions.toLocaleString()+" billable impressions ("+billableBlocks+" × 1,500 at "+moneyUsdNgn(pricePerBlock)+"). Final charge is created only after server-side validation."}`);setStep("review");setSubmitting(false);}
- if(step==="prep")return <section className="panel"><h1>Advertise with Kivora</h1><p>Every campaign goes through preflight checks before a bill is created. We store monitoring data separately from viewer actions and never count an ad impression as a YouTube view.</p><div className="steps"><div>1. Choose a format.</div><div>2. Provide a Drive asset ID or an approved YouTube URL.</div><div>3. Review the estimated bill before payment.</div><div>4. Server validates, bills and activates only after verification.</div></div><button className="primary" onClick={()=>setStep("formats")}>Choose format</button></section>;
- if(step==="formats")return <section className="panel"><button onClick={()=>setStep("prep")}>← Back</button><h1>Choose format</h1><div className="formatGrid"><button className="formatCard" onClick={()=>choose("square")}><b>Square banner</b><span>1080 × 1080 · Google Drive ID</span><strong>{moneyUsdNgn(1.99)} / 1,500 impressions</strong></button><button className="formatCard" onClick={()=>choose("rectangle")}><b>Rectangle banner</b><span>1200 × 628 · Google Drive ID</span><strong>{moneyUsdNgn(1.99)} / 1,500 impressions</strong></button><button className="formatCard" onClick={()=>choose("video")}><b>Video campaign</b><span>Google Drive ID or YouTube URL</span><strong>{moneyUsdNgn(2.99)} / 1,500 impressions</strong></button></div></section>;
- if(step==="review")return <section className="panel"><button onClick={()=>setStep("form")}>← Edit campaign</button><h1>Bill preview</h1><div className="priceBox"><b>Estimated bill: {moneyUsdNgn(estimatedBill)}</b><span>{owner?"Owner rate: $0.00 (billing bypass)":`Rate: ${moneyUsdNgn(pricePerBlock)} / 1,500 impressions`}</span><span>Target impressions: {targetImpressions.toLocaleString()}</span><span>Billable impressions: {billableImpressions.toLocaleString()}</span><span>Duration: {days} day{days===1?"":"s"}</span><small>{owner?"This account is exempt from Kivora advertising charges, but campaign validation and monitoring still apply.":"No payment should be captured until the server re-checks the campaign, asset access, price, currency, ownership and campaign status."}</small></div><button className="primary" onClick={()=>setStatus("Payment endpoint must create the checkout server-side. No charge has been attempted by this screen.")}>Continue to secure payment</button>{status&&<div className="status">{status}</div>}</section>;
- const meta={square:["Square banner",moneyUsdNgn(1.99)+" / 1,500 impressions"],rectangle:["Rectangle banner",moneyUsdNgn(1.99)+" / 1,500 impressions"],video:["Video campaign",moneyUsdNgn(2.99)+" / 1,500 impressions"]}[format];
- return <section className="panel"><button onClick={()=>setStep("formats")}>← Change format</button><h1>{meta[0]}</h1><form onSubmit={submit}>{[["assetId",format==="video"?"Google Drive file ID or YouTube URL":"Google Drive file ID"],["brand","Brand name"],["title","Campaign title"],["description","Description"],["site","Destination URL"],["country","Target country"],["targetImpressions","Target impressions"],["duration","Campaign duration (days)"]].map(([k,l])=><label key={k}>{l}<input value={form[k]} onChange={e=>update(k,e.target.value)} required/></label>)}<div className="priceBox"><span>Rate <b>{owner?"$0.00 (₦0) — owner billing bypass":moneyUsdNgn(pricePerBlock)+" / 1,500 impressions"}</b></span><span>Billable impressions <b>{billableImpressions.toLocaleString()}</b></span><span>Estimated bill <b>{moneyUsdNgn(estimatedBill)}</b></span><small>{owner?"No payment is required for the configured owner account. Campaign validation still applies.":"The bill is calculated before payment. It is not a final charge until the server validates it."}</small></div><button className="primary" disabled={submitting}>{submitting?"Checking…":"Review bill before payment"}</button></form>{status&&<div className="status">{status}</div>}</section>
+ async function submit(e){
+  e.preventDefault();if(submitting)return;setSubmitting(true);setStatus("");
+  const result=preflight();
+  if(result!=="PASS"){setStatus(result);setSubmitting(false);return;}
+  setStatus(`Preflight passed. ${owner?"Owner billing bypass applies. No payment is required.":"Estimated bill: "+moneyUsdNgn(estimatedBill)+" for "+billableImpressions.toLocaleString()+" qualified video impressions ("+billableBlocks+" × 1,500 at "+moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)+")."} Pacing target: about ${dailyImpressions.toLocaleString()} qualified impressions/day and ${moneyUsdNgn(dailyBudget)}/day.`);
+  setStep("review");setSubmitting(false);
+ }
+ if(step==="prep")return <section className="panel"><h1>Advertise with Kivora</h1><p>Kivora uses a video-only Shorts advertising system. Choose whether you are simply promoting a Short or sending viewers to an app/site.</p><div className="steps"><div><b>Promote a Short</b> — no destination link required.</div><div><b>Promote an app/site</b> — destination URL and destination name are required and appear in a compact banner under the sponsored video.</div><div>Qualified impressions are counted server-side after meaningful viewability; raw page loads are not billable.</div><div>Set a campaign duration so Kivora can monitor daily pacing and spend.</div></div><div className="priceBox"><b>{moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)} / 1,500 qualified video impressions</b><span>Minimum campaign: 1,500 qualified impressions.</span><span>One qualified impression requires at least 2 seconds at 50%+ visibility.</span></div><button className="primary" onClick={()=>setStep("form")}>Create video campaign</button><div className="campaignList"><div className="relatedHeading"><div><small>MY CAMPAIGNS</small><h2>Expense monitor</h2></div><button onClick={refreshCampaigns} disabled={loadingCampaigns}>{loadingCampaigns?"Refreshing…":"Refresh"}</button></div>{!myCampaigns.length?<p className="tiny">No campaigns yet. Completed campaigns will show spend, delivery and pacing here.</p>:myCampaigns.map(c=>{const target=Number(c.targetImpressions||0),delivered=Number(c.qualifiedImpressions||c.impressions||0),spend=Number(c.spend||0),remaining=Math.max(0,target-delivered);const days=Math.max(1,Number(c.durationDays||1));const daily=target?Math.ceil(target/days):0;return <div className="campaignRow" key={c.id}><div><b>{c.title||"Untitled campaign"}</b><span>{c.status} · {c.startDate} → {c.endDate}</span></div><div><b>{delivered.toLocaleString()} / {target.toLocaleString()}</b><span>{moneyUsdNgn(spend)} spent · {moneyUsdNgn(Math.max(0,Number(c.totalBudgetUsd||0)-spend))} remaining</span></div><div><b>{remaining.toLocaleString()}</b><span>impressions remaining · ~{daily.toLocaleString()}/day planned</span></div></div>})}</div></section>;
+ if(step==="review")return <section className="panel"><button onClick={()=>setStep("form")}>← Edit campaign</button><h1>Campaign & expense monitor</h1><div className="campaignMonitor"><div><small>TOTAL BUDGET</small><b>{moneyUsdNgn(estimatedBill)}</b></div><div><small>SPENT NOW</small><b>{moneyUsdNgn(0)}</b></div><div><small>REMAINING</small><b>{moneyUsdNgn(estimatedBill)}</b></div><div><small>DAILY PLAN</small><b>{moneyUsdNgn(dailyBudget)}</b></div><div><small>IMPRESSIONS/DAY</small><b>{dailyImpressions.toLocaleString()}</b></div><div><small>CAMPAIGN DAYS</small><b>{days}</b></div></div><div className="priceBox"><b>{form.promotionType==="app"?"App/site promotion":"Short promotion"}</b><span>Delivery: {startDate} → {endDate} ({days} day{days===1?"":"s"})</span><span>Target: {targetImpressions.toLocaleString()} qualified impressions</span><span>Billable: {billableImpressions.toLocaleString()} impressions</span><span>Rate: {moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)} per 1,500 impressions</span><span>Planned spend/day: {moneyUsdNgn(dailyBudget)}</span><small>Spend is derived from qualified delivery, capped at the campaign target. The monitor separates delivered spend from the remaining budget.</small></div><button className="primary" disabled={submitting} onClick={async()=>{if(submitting)return;setSubmitting(true);setStatus("");try{const u=auth.currentUser;if(!u||u.isAnonymous)throw new Error("Connect Google before creating an advertising campaign.");const token=await u.getIdToken();const r=await fetch("/api/ad-campaign",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${token}`},body:JSON.stringify({...form,durationDays:days})});const d=await r.json();if(!r.ok)throw new Error(d.error||"Campaign could not be created.");setCampaignId(d.campaignId||"");if(d.paymentRequired&&d.paymentLink){setStatus("Secure Flutterwave checkout is opening…");window.location.href=d.paymentLink;return;}setStatus("Campaign created and ready for delivery.");}catch(e){setStatus(e?.message||"Campaign could not be created.")}finally{setSubmitting(false)}}}>{submitting?"Preparing…":"Continue to secure payment"}</button>{status&&<div className="status">{status}</div>}</section>;
+ return <section className="panel"><button onClick={()=>setStep("prep")}>← Back</button><h1>Video campaign</h1><form onSubmit={submit}><label>Promotion type<select value={form.promotionType} onChange={e=>update("promotionType",e.target.value)}><option value="short">Promote my Short</option><option value="app">Promote an app or site</option></select></label>{[["assetId","YouTube Short URL or Google Drive video file ID/link"],["brand","Brand / creator name"],["title","Campaign title"],["description","Description"],["country","Target country"],["targetImpressions","Target qualified impressions"],["duration","Campaign duration (days)"],["startDate","Start date"]].map(([k,l])=><label key={k}>{l}<input value={form[k]} onChange={e=>update(k,e.target.value)} type={k==="duration"||k==="targetImpressions"?"number":k==="startDate"?"date":"text"} min={k==="duration"?1:k==="targetImpressions"?1500:undefined} max={k==="duration"?90:k==="targetImpressions"?100000000:undefined} required={k!=="country"&&k!=="description"}/></label>)}{destinationRequired&&<div className="destinationFields"><label>App/site name shown on banner<input value={form.destinationName} onChange={e=>update("destinationName",e.target.value)} placeholder="e.g. Kivora" required/></label><label>Destination URL<input value={form.site} onChange={e=>update("site",e.target.value)} placeholder="https://example.com" inputMode="url" required/></label><label>App icon URL <span className="tiny">optional — site favicon is used if blank</span><input value={form.siteIcon} onChange={e=>update("siteIcon",e.target.value)} placeholder="https://example.com/icon.png" inputMode="url"/></label><div className="destinationPreview"><span>LINK PREVIEW</span><div><span className="destinationIcon">◆</span><strong>{form.destinationName||"Your app/site"}</strong><small>{form.site||"https://example.com"}</small><b>Open ↗</b></div></div></div>}<div className="priceBox"><span>Rate <b>{owner?"$0.00 (₦0) — owner billing bypass":moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)+" / 1,500 qualified impressions"}</b></span><span>Billable target <b>{billableImpressions.toLocaleString()}</b></span><span>Estimated bill <b>{moneyUsdNgn(estimatedBill)}</b></span><span>Daily pacing <b>{dailyImpressions.toLocaleString()} impressions/day · {moneyUsdNgn(dailyBudget)}/day</b></span><span>Delivery window <b>{startDate} → {endDate}</b></span><small>{destinationRequired?"The app/site banner will appear directly beneath the sponsored video and link to the supplied destination.":"No destination link is required for Short-only promotion."}</small></div><button className="primary" disabled={submitting}>{submitting?"Checking…":"Review campaign & expenses"}</button></form>{status&&<div className="status">{status}</div>}</section>
 }
 
 function SponsoredCard({campaign,onNotice}){
- const isVideo=campaign.format==="video";
- const youtubeId=extractYouTubeId(campaign.assetId||campaign.youtubeUrl||"");
- const imageUrl=campaign.assetUrl||campaign.imageUrl||(campaign.assetId?`https://drive.google.com/uc?export=view&id=${encodeURIComponent(campaign.assetId)}`:"");
- return <article className="videoCard sponsoredCard">
-   <div className="sponsoredTop"><span>SPONSORED</span><small>Paid placement</small></div>
-   <div className="sponsorMedia">{isVideo&&youtubeId?<iframe title={campaign.title||"Sponsored video"} src={`https://www.youtube-nocookie.com/embed/${youtubeId}?rel=0&playsinline=1`} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen/>:imageUrl?<img src={imageUrl} alt={campaign.title||"Sponsored content"}/>:<div className="assetMissing">Sponsored media unavailable</div>}</div>
-   <div className="videoBody"><div className="eyebrow">SPONSORED · {campaign.brand||"Advertiser"}</div><h2>{campaign.title||"Sponsored content"}</h2><details className="videoInfo" open><summary>About this promotion</summary><p>{campaign.description||"Paid promotional content shown by Kivora."}</p></details><div className="actionRow"><a className="primary softBtn" href={campaign.site} target="_blank" rel="noopener noreferrer">Visit advertiser ↗</a><button onClick={()=>onNotice("This is a paid Kivora placement. Sponsored content is separate from YouTube's organic recommendations.")}>Why sponsored?</button></div></div>
- </article>
+ const source=campaign.assetSource||"youtube";
+ const id=source==="drive"?campaign.assetId:extractYouTubeId(campaign.assetId||campaign.youtubeUrl||"");
+ if(!id)return null;
+ const video={id,source,assetId:campaign.assetId,title:campaign.title||"Sponsored Short",channelTitle:campaign.brand||"Advertiser",durationSeconds:Number(campaign.durationSeconds||30),site:campaign.site||"",destinationName:campaign.destinationName||campaign.brand||"",siteIcon:campaign.siteIcon||"",promotionType:campaign.promotionType||"short"};
+ return <ShortsPlayer video={video} ad onNotice={onNotice} playbackKey={campaign.id} campaignId={campaign.id}/>;
 }
 
 function extractYouTubeId(value=""){
@@ -636,9 +723,9 @@ function extractYouTubeId(value=""){
 
 function FAQs(){
  const items=[
-  ["Where do Kivora videos come from?","Kivora discovers video metadata through YouTube's API and plays the source through YouTube's official embedded player. Kivora does not download or re-host the audiovisual stream."],
+  ["Where do Kivora videos come from?","Organic videos are discovered through YouTube's API and played through YouTube's official embedded player. Kivora does not download or re-host the audiovisual stream. Sponsored campaigns are tracked separately from organic viewing."],
     ["Are sponsored videos clearly marked?","Yes. Paid campaigns that pass Kivora's approval flow are shown in the FYP with a Sponsored label."],
-  ["How much does advertising cost?",`Image/banner placements are ${moneyUsdNgn(1.99)} per 1,500 impressions. Video advertising is ${moneyUsdNgn(2.99)} per 1,500 impressions. Naira figures are display estimates using ₦${USD_TO_NGN_DISPLAY_RATE.toLocaleString()} per $1; the server remains authoritative for the final payment currency and amount.`],
+  ["How much does advertising cost?",`Kivora uses video-only advertising at ${moneyUsdNgn(1.00)} per 1,500 qualified video impressions. A qualified impression requires at least 2 seconds of viewability at 50%+ visibility. Naira figures are display estimates using ₦${USD_TO_NGN_DISPLAY_RATE.toLocaleString()} per $1; the server remains authoritative for the final payment currency and amount.`],
   ["Does Kivora replace YouTube?","No. YouTube remains the source for YouTube content, playback, creator attribution and YouTube-specific actions."],
   ["Can I use Kivora in dark mode?","Yes. Choose Light, Dark or System mode from the menu. Your preference is saved on this device."],
   ["What native-style features does Kivora provide?","Kivora supports installable PWA behavior where the browser allows it, fullscreen playback, device sharing, saved videos, watch-first access and push notifications after permission is granted."]
@@ -648,7 +735,7 @@ function FAQs(){
 
 function Legal({page}){
  const content={
- about:["About Kivora","Kivora is an independent entertainment discovery product. It organizes links and official embedded video sources so viewers can discover long-form entertainment in a Kivora-designed environment. Kivora is not YouTube and does not claim ownership of third-party videos.","Our catalog can use publicly available YouTube metadata and official embed playback. Availability can change when the original source changes, removes, restricts, or disables a video."],
+ about:["About Kivora","Kivora is an independent entertainment discovery product. It organizes links and official embedded video sources so viewers can discover short-form entertainment in a Kivora-designed environment. Kivora is not YouTube and does not claim ownership of third-party videos.","Our catalog can use publicly available YouTube metadata and official embed playback. Availability can change when the original source changes, removes, restricts, or disables a video."],
  privacy:["Privacy","Kivora may process account identifiers, saved-video data, notification tokens and basic product analytics needed to operate the service. Anonymous sessions may be used for watch-first access. Payment credentials are handled by the payment provider; Kivora should not store card details.","You can request deletion of Kivora account data through the contact route published by the operator. Third-party services such as Google, YouTube and Firebase may process data under their own terms and privacy policies. Do not submit sensitive personal information through Kivora."],
  terms:["Terms","Use Kivora lawfully and do not attempt to scrape, overload, bypass access controls, manipulate engagement, impersonate creators, or submit material you do not have rights to use. Kivora may remove campaigns or links that violate these rules or applicable law.","Video playback is supplied by the original platform. Kivora does not guarantee availability, accuracy, monetization status or continued access to third-party videos."],
  disclaimer:["Disclaimer","Kivora is an independent discovery service. References, thumbnails, titles and embedded videos can belong to their respective creators, publishers or platforms. Appearance in Kivora is not an endorsement, ownership claim or transfer of copyright.","Kivora does not download or re-host the audiovisual files used in its official embedded player flow. Where a rights holder believes a listing or link is inaccurate or should not appear, use the published contact route so it can be reviewed."],

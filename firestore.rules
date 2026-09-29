@@ -93,9 +93,13 @@ service cloud.firestore {
     }
 
     match /campaigns/{id} {
+      // Campaign creation, payment state, moderation state, delivery counters and
+      // activation are server-authoritative. Admin SDK writes bypass these rules.
       allow read: if (signedIn() && resource.data.advertiserId == request.auth.uid) || resource.data.status == "ready";
-      allow create: if signedIn() && request.resource.data.advertiserId == request.auth.uid;
-      allow update, delete: if signedIn() && resource.data.advertiserId == request.auth.uid;
+      allow create, update, delete: if false;
+      match /impressionEvents/{eventId} {
+        allow read, write: if false;
+      }
     }
   }
 }

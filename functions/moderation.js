@@ -3,11 +3,12 @@
 const blockedAdult=['porn','pornography','xxx','escort','onlyfans','nude','nudes','adult content'];
 const blockedPolitical=['vote','election','candidate','political party','campaign','ballot','president','governor','senator','politician','electoral'];
 const driveId=/^[A-Za-z0-9_-]{20,}$/;
-const youtube=/^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)[A-Za-z0-9_-]{6,}/i;
+const driveUrl=/^https?:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)[A-Za-z0-9_-]+/i;
+const youtube=/^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/)[A-Za-z0-9_-]{6,}/i;
 
 export function validateAsset(format, asset){
  const value=(asset||'').trim();
- if(format==='video') return driveId.test(value)||youtube.test(value);
+ if(format==='video') return driveId.test(value)||driveUrl.test(value)||youtube.test(value);
  return driveId.test(value)||/^https?:\/\//i.test(value);
 }
 

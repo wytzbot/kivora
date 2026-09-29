@@ -1,6 +1,6 @@
 # Kivora
 
-Kivora is a mobile-first independent entertainment discovery web app. It is intentionally **not a YouTube clone**.
+Kivora is a mobile-first, Shorts-first independent entertainment discovery web app. It is intentionally **not a YouTube clone**.
 
 ## Current safeguards and flows
 
@@ -8,7 +8,7 @@ Kivora is a mobile-first independent entertainment discovery web app. It is inte
 - Anonymous watch-first access remains available; Google can be connected later.
 - Redirect results are processed after returning to Kivora.
 - Videos use the official YouTube IFrame Player API.
-- A video automatically starts muted when roughly 55% of its player reaches the viewport and pauses when it leaves the viewing area.
+- Short videos automatically start muted when at least 65% of the player reaches the viewport and pause when they leave. The feed is server-filtered to videos up to 180 seconds.
 - Kivora supplies its own mute/unmute and captions controls around the player.
 - Comments are disabled to reduce Firestore storage/read/write costs.
 - Kivora actions are separate from YouTube engagement: Like, Save and Share belong to Kivora.
@@ -41,36 +41,58 @@ Important limitation: the official embedded player does not expose arbitrary thi
 
 The Pro entitlement is checked from a server-issued Firebase Auth custom claim (`pro=true` or `plan=pro`). The frontend must not use a localStorage or client-only "premium" flag as proof of payment.
 
-## Advertising: pre-bill calculation and monitoring
+## Advertising implementation notes
+
+- Kivora accepts either a YouTube source or a public Google Drive video source for sponsored Shorts. Google Drive files are embedded from Drive; Kivora does not download or store the audiovisual file.
+- Sponsored app/site campaigns require a destination URL and name. Short-only campaigns do not.
+- Billing is $1 per 1,500 qualified impressions. A qualified exposure requires at least 2 seconds and at least 50% visibility.
+- Impression counters and campaign payment state are server-authoritative. Firestore client writes to `campaigns` and `impressionEvents` are disabled; server endpoints use Firebase Admin.
+- Configure `FIREBASE_SERVICE_ACCOUNT_JSON` and `FLW_SECRET_KEY` as Vercel server environment variables. Never put either secret in `VITE_*` variables.
+- Advertiser checkout uses Flutterwave's hosted checkout endpoint server-side, then verifies the transaction before changing a campaign to `ready`.
+
+## Advertising: video-only campaigns, links and expense monitoring
+
+Kivora uses a **video-only Shorts advertising model**. Banner/image placements are not supported. Advertisers can choose between two promotion types:
+
+- **Promote my Short:** the sponsored Short does not require a destination link.
+- **Promote an app or site:** a valid HTTPS destination URL and destination name are required. The destination is rendered as a compact banner directly beneath the sponsored video, with an app/site icon (custom icon when supplied; otherwise a favicon fallback), name, domain and an Open action.
 
 Before payment, Kivora performs a preflight check for:
 
-- supported asset format;
-- destination URL;
+- supported video asset;
+- promotion type and required destination fields;
 - prohibited political/adult terms;
 - positive target impression count (minimum 1,500);
-- duration limits;
+- campaign duration (1–90 days);
+- start date and campaign pacing values;
 - required brand/title information.
 
-Supported assets:
+### Pricing
 
-- **Square banner:** Google Drive file ID or permitted public image URL.
-- **Rectangle banner:** Google Drive file ID or permitted public image URL.
-- **Video:** Google Drive file ID or YouTube URL.
+The video rate is **$1.00 per 1,500 qualified impressions**. Targets are rounded up to whole 1,500-impression billing blocks. For example, 1,500 impressions = $1.00, 3,000 = $2.00, and 4,500 = $3.00. The server recalculates the amount before payment; the browser is only a preview.
 
-A Drive file ID alone is not proof that the browser can access the file. The server should verify the file's MIME type, access and download/view capability before activation. Google Drive permissions determine who can read a file, and Drive exposes capabilities that should be checked rather than assuming access. citeturn0search0turn0search4
+A qualified impression requires at least **2 seconds of viewability at 50%+ visibility** and is intended to be counted once for the qualifying delivery event. Raw iframe loads, hidden players and ordinary page loads are not billable.
 
-The UI shows an estimated bill **before** payment. The current rate is **$1.99 per 1,500 impressions**. Target impressions are rounded up to whole 1,500-impression billing blocks, so the server and browser preview use the same deterministic calculation. The server must calculate the amount again, then validate currency, reference, asset status, moderation status and campaign status before creating/accepting a charge.
+### Campaign days and expense monitoring
 
-`functions/ad-engine.js` contains the server-authoritative calculation helpers for:
+Each campaign has a start date and duration. Kivora calculates:
 
-- impression-based billing at **$1.99 per 1,500 impressions**;
-- activation gating;
-- impression/click/spend monitoring;
-- CTR and remaining-budget calculation;
-- automatic impression-target monitoring state.
+- campaign end date;
+- total impression target and rounded billable target;
+- total campaign budget;
+- planned daily impression target;
+- planned daily budget;
+- delivered qualified impressions;
+- delivered spend;
+- remaining impressions and remaining budget;
+- elapsed days and expected impressions to date;
+- pacing state (on track, ahead or behind).
 
-The browser must never be the source of truth for billing, spend, impressions, clicks or Pro entitlement.
+`functions/ad-engine.js` contains the server-authoritative helpers for pricing, qualified-impression validation, activation, delivered spend and campaign pacing. `updateAdMonitor()` keeps delivery counters separate from viewer engagement and caps billable impressions at the campaign target.
+
+The browser must never be the source of truth for billing, spend, impressions, clicks or campaign activation.
+
+A server-side campaign record should retain the promotion type, destination fields, start date, duration, target impressions, verified payment state, moderation state and monitor state.
 
 ## Drive assets
 
@@ -178,7 +200,7 @@ The endpoint filters discovery to embeddable/syndicated videos and returns norma
 - Videos expose secondary metadata inside an expandable “About this video” section.
 - Native-style actions include installable PWA support where the browser exposes the install prompt, device share, fullscreen playback and direct “Watch on YouTube” links.
 - Approved sponsored campaigns can appear in the FYP with a visible Sponsored label.
-- Banner/image advertising is $1.99 per 1,500 impressions; video advertising is $2.99 per 1,500 impressions.
+- Advertising is video-only at $1.00 per 1,500 qualified impressions. App/site campaigns can optionally display a destination banner beneath the sponsored video.
 
 
 ## Action-movie discovery update
@@ -216,3 +238,32 @@ This is an effectively endless feed from the user's perspective, not an unlimite
 
 ## Google sign-in recovery
 Google authentication now signs directly into the selected Google account instead of attempting to link the account picker result to Kivora's anonymous watch-first session. This avoids `auth/credential-already-in-use` when the Gmail address already has a Kivora account. Existing redirect flows also recover by authenticating the existing Google account.
+
+
+## Shorts-only feed and video advertising
+
+Kivora no longer renders banner or rectangle ads. The feed accepts only eligible short-form videos up to 180 seconds, and sponsored delivery is video-only. A video ad impression is intended to become billable only after at least 2 seconds of playback while at least 50% of the ad player is visible; repeated raw loads are not treated as qualified delivery. The server-side ad engine uses $1.00 per 1,500 qualified impressions, caps delivered billing at the campaign target, and rejects non-video campaign formats.
+
+
+## Playback separation
+- Organic feed items use the official YouTube embedded player and are never sent to `/api/ad-impression`.
+- Sponsored feed items are marked `SPONSORED`, carry the campaign ID, and alone can create billable Kivora impression events.
+- Google Drive sponsored assets are embedded from Drive and are not downloaded or stored by Kivora.
+- YouTube-hosted sponsored assets still use YouTube's official player. YouTube controls any YouTube-native advertising inside that player; Kivora's sponsored campaign accounting is separate.
+- Kivora cannot programmatically suppress YouTube-native ads in an embedded YouTube player.
+
+
+## Shorts eligibility enforcement
+
+Organic YouTube videos are accepted only when the YouTube Data API reports a square or vertical player, duration of 180 seconds or less, and a publication date on/after October 15, 2024. This follows YouTube’s current standard-channel Shorts classification rule. Sponsored YouTube assets use the same server-side validation. Google Drive sponsored assets remain supported as externally hosted short-form videos and are not stored by Kivora.
+
+
+### Shorts eligibility and impression delivery
+
+YouTube Shorts eligibility is checked server-side using the YouTube Data API. The API requests bounded embed dimensions (1080x1920), then Kivora requires a square/vertical aspect ratio, duration <= 180 seconds, publication date on/after 2024-10-15, and embeddability where applicable. The API's `player.embedWidth`/`embedHeight` fields are only returned when maxWidth/maxHeight are supplied.
+
+Ad impressions are viewer events, not advertiser events. The delivery endpoint accepts signed-in viewers and anonymous viewers; an advertiser viewing their own campaign is not billable. Impression events remain server-side and duplicate exposure keys are rejected.
+
+
+## Shared Flutterwave webhook
+Kivora campaign checkout references start with `KIVORA-` and are handled by the existing WyDev Flutterwave webhook endpoint. The webhook verifies the transaction with Flutterwave, checks reference/amount/currency, then marks the matching Kivora campaign paid and ready. Kivora does not need a second Flutterwave webhook URL.

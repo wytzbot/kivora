@@ -20,7 +20,8 @@ export function effectiveOriginality(video) {
 }
 
 export function canRecommend(video) {
-  if (isLikelySpam(video)) return false;
+  const seconds=Number(video?.durationSeconds ?? video?.contentDetails?.durationSeconds ?? 0);
+  if (seconds <= 0 || seconds > 180 || isLikelySpam(video)) return false;
   const count=Number(video?.ratingCount||0);
   return count < MIN_CONFIDENT_RATINGS || effectiveOriginality(video) >= MIN_RECOMMENDATION_RATING;
 }
