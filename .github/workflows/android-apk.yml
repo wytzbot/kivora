@@ -27,14 +27,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # No "cache: npm" here: it fails the job when package-lock.json is not committed.
+      # Deliberately do not enable setup-node's npm cache here.
+      # GitHub Actions requires a committed lockfile for cache: npm, and this
+      # project intentionally does not require one to build.
       - name: Setup Node 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          check-latest: false
 
       - name: Install web dependencies
-        run: npm install --include=dev
+        run: npm install --include=dev --no-audit --no-fund
 
       - name: Verify Capacitor toolchain
         run: |
