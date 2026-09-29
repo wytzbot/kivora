@@ -38,16 +38,11 @@ jobs:
 
       - name: Build Kivora web app
         env:
-          # Deployed Vercel URL. Required: the APK has no /api backend of its own.
-          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
-          VITE_PUBLIC_URL: ${{ secrets.VITE_PUBLIC_URL }}
+          # Defaults to the production site; override with the VITE_API_BASE_URL secret if it moves.
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL || 'https://kivora-ecru.vercel.app' }}
+          VITE_PUBLIC_URL: ${{ secrets.VITE_PUBLIC_URL || 'https://kivora-ecru.vercel.app' }}
           VITE_FLUTTERWAVE_PUBLIC_KEY: ${{ secrets.VITE_FLUTTERWAVE_PUBLIC_KEY }}
-        run: |
-          if [ -z "$VITE_API_BASE_URL" ]; then
-            echo "::error::Add the VITE_API_BASE_URL repository secret (your deployed Vercel URL). Without it the APK cannot load videos."
-            exit 1
-          fi
-          npm run build
+        run: npm run build
 
       - name: Add Android platform
         run: npx cap add android

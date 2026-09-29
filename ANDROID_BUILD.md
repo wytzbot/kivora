@@ -4,8 +4,8 @@ Kivora stays a React/Vite app. Capacitor wraps the built `dist/` files in a nati
 
 ## One-time setup
 
-1. **Deploy the web app to Vercel first.** The APK contains only static files; video search, ads and
-   payments call your Vercel `/api/*` routes. Note the deployed URL.
+1. **The web app must stay deployed** at https://kivora-ecru.vercel.app. The APK contains only static files; video search, ads and
+   payments call its `/api/*` routes.
 2. **Firebase Google sign-in on Android** (popup sign-in does not work in a WebView):
    - Firebase console → Project settings → add an Android app with package `com.kivora.app`.
    - Add the SHA-1 of your signing key (debug and release) and enable Google sign-in.
@@ -18,7 +18,7 @@ Kivora stays a React/Vite app. Capacitor wraps the built `dist/` files in a nati
 
 | Secret | Required | Purpose |
 | --- | --- | --- |
-| `VITE_API_BASE_URL` | yes | Deployed Vercel URL, e.g. `https://kivora.vercel.app` |
+| `VITE_API_BASE_URL` | no | Defaults to `https://kivora-ecru.vercel.app` |
 | `VITE_PUBLIC_URL` | no | Share-link URL (defaults to the API URL) |
 | `VITE_FLUTTERWAVE_PUBLIC_KEY` | no | Flutterwave public key |
 | `GOOGLE_SERVICES_JSON` | for Google login | Full contents of `google-services.json` |
@@ -30,7 +30,7 @@ Run **Actions → Build Kivora APK → Run workflow**, then download the `kivora
 
 ```bash
 npm install
-VITE_API_BASE_URL=https://your-app.vercel.app npm run build
+npm run build
 npm run android:setup
 cp /path/to/google-services.json android/app/
 npx cap sync android

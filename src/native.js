@@ -4,8 +4,8 @@ import { Capacitor } from "@capacitor/core";
 export const isNative = Capacitor.isNativePlatform();
 
 // The APK bundles only the static web build, so "/api/..." has no server behind it.
-// Point native builds at the deployed Vercel site (set VITE_API_BASE_URL at build time).
-const API_BASE = String(import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+// Point native builds at the deployed Vercel site (override with VITE_API_BASE_URL at build time).
+const API_BASE = String(import.meta.env.VITE_API_BASE_URL || (isNative ? "https://kivora-ecru.vercel.app" : "")).replace(/\/$/, "");
 export const apiUrl = (path) => `${API_BASE}${path}`;
 
 // Public https origin used for share links and the YouTube player "origin" param.
