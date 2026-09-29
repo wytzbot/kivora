@@ -1,9 +1,10 @@
 import { initializeApp } from "firebase/app";
 import { KIVORA_OWNER_EMAIL } from "./access.js";
+import { isNative } from "./native.js";
 import { getAnalytics, isSupported } from "firebase/analytics";
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
-  getRedirectResult, signInAnonymously, onAuthStateChanged,
+  getRedirectResult, signInAnonymously, onAuthStateChanged, signInWithCredential,
   linkWithPopup, linkWithRedirect, signOut
 } from "firebase/auth";
 import {
@@ -47,6 +48,16 @@ export async function startAnonymousSession(){
   return (await signInAnonymously(auth)).user;
 }
 export async function signInWithGoogle(){
+  // Firebase popup/redirect sign-in does not work inside the Android WebView.
+  // Use the native Google account picker, then hand the credential to the web SDK.
+  if(isNative){
+    const { FirebaseAuthentication } = await import("@capacitor-firebase/authentication");
+    const result = await FirebaseAuthentication.signInWithGoogle();
+    const idToken = result?.credential?.idToken;
+    if(!idToken) throw Object.assign(new Error("Google sign-in did not return a credential."),{code:"auth/invalid-credential"});
+    const credential = GoogleAuthProvider.credential(idToken, result?.credential?.accessToken);
+    return (await signInWithCredential(auth, credential)).user;
+  }
   // Do not link an anonymous Firebase user to Google here. If that Google
   // account already exists, Firebase can return auth/credential-already-in-use
   // after the account picker, which looks like a failed login to the user.
@@ -79,6 +90,9 @@ export async function getProEntitlement(user=auth.currentUser){
 }
 
 export async function enablePushNotifications(){
+  // Web Push / service workers are not available in the Android shell. Native push
+  // needs @capacitor/push-notifications + FCM, which is not wired up yet.
+  if(isNative) throw new Error("Push notifications are not available in the Android app yet.");
   if(!("serviceWorker"in navigator)||!("Notification"in window))
     throw new Error("Push notifications are not supported in this browser.");
   if(!(await messagingSupported())) throw new Error("Push notifications are not supported here.");

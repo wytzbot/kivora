@@ -5,6 +5,8 @@ function cleanId(v){return String(v||'').trim().replace(/[^A-Za-z0-9_-]/g,'').sl
 function fail(res,e){return res.status(e?.statusCode||400).json({error:e?.message||'Request failed.'})}
 
 export default async function handler(req,res){
+  res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('Access-Control-Allow-Methods','GET,POST,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');
+  if(req.method==='OPTIONS') return res.status(204).end();
   res.setHeader('Content-Type','application/json; charset=utf-8');
   if(req.method!=='POST') return res.status(405).json({error:'Method not allowed.'});
   try{
