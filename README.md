@@ -8,7 +8,7 @@ Kivora is a mobile-first, Shorts-first independent entertainment discovery web a
 - Anonymous watch-first access remains available; Google can be connected later.
 - Redirect results are processed after returning to Kivora.
 - Videos use the official YouTube IFrame Player API.
-- Short videos automatically start muted when at least 65% of the player reaches the viewport and pause when they leave. The feed is server-filtered to videos up to 180 seconds.
+- Short videos automatically attempt to start with sound when at least 65% of the player reaches the viewport and pause when they leave. Browser autoplay policies may still block unmuted autoplay until the viewer interacts with the page. The feed is server-filtered to videos up to 180 seconds.
 - Kivora supplies its own mute/unmute and captions controls around the player.
 - Comments are disabled to reduce Firestore storage/read/write costs.
 - Kivora actions are separate from YouTube engagement: Like, Save and Share belong to Kivora.

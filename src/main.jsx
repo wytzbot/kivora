@@ -89,20 +89,14 @@ async function rateVideo(videoId,uid,value){
 
 function App(){
  const initialWatchId=useRef(new URLSearchParams(window.location.search).get("watch")||"");
- const [tab,setTab]=useState(()=>initialWatchId.current?"watch":"home"),[premium,setPremium]=useState(false),[menu,setMenu]=useState(false);
+ const [tab,setTab]=useState("home"),[premium,setPremium]=useState(false),[menu,setMenu]=useState(false);
  const [user,setUser]=useState(auth.currentUser),[busy,setBusy]=useState(false),[notice,setNotice]=useState("");
  const [notifyPrompt,setNotifyPrompt]=useState(true);
  const [pendingNewVideos,setPendingNewVideos]=useState(0),[ratings,setRatings]=useState({}),[query,setQuery]=useState(""),[category,setCategory]=useState("all"),[videos,setVideos]=useState(EMPTY_VIDEOS),[pageTokens,setPageTokens]=useState([]),[hasMore,setHasMore]=useState(true),[loadingMore,setLoadingMore]=useState(false),[sponsored,setSponsored]=useState([]),[videoLoading,setVideoLoading]=useState(true),[videoError,setVideoError]=useState(""),[theme,setTheme]=useState(()=>localStorage.getItem("kivora-theme")||"system"),[installPrompt,setInstallPrompt]=useState(null),[selectedVideo,setSelectedVideo]=useState(null);
  const feedSentinelRef=useRef(null);
  const signedIn=!!user&&!user.isAnonymous;
  const owner=isKivoraOwner(user);
- useEffect(()=>{
-   const id=initialWatchId.current;
-   if(!id) return;
-   let live=true;
-   fetchKivoraVideoById(id).then(v=>{if(live&&v){setSelectedVideo(v);setTab("watch");}}).catch(e=>{if(live)setNotice(e?.message||"This video could not be loaded.")});
-   return()=>{live=false};
- },[]);
+
 
  useEffect(()=>{
    const params=new URLSearchParams(window.location.search);
@@ -228,27 +222,22 @@ function App(){
    window.scrollTo({top:0,behavior:"auto"});
  };
  const openVideo=video=>{
-   setSelectedVideo(video);
-   setTab("watch");
-   setMenu(false);
-   window.history.pushState({kivora:true,tab:"watch",videoId:video.id},"",`?watch=${encodeURIComponent(video.id)}`);
-   window.scrollTo({top:0,behavior:"auto"});
+   setNotice("Kivora Shorts stay in the vertical FYP. Use Share to send the Short without opening a separate watch page.");
  };
 
  useEffect(()=>{
    const base=window.location.origin;
-   const canonical=tab==="watch"&&selectedVideo?`${base}/?watch=${encodeURIComponent(selectedVideo.id)}`:`${base}/`;
-   const title=tab==="watch"&&selectedVideo?`${selectedVideo.title} | Kivora`:category!=="all"?`${category[0].toUpperCase()+category.slice(1)} Shorts | Kivora`:"Kivora | Shorts";
-   const description=tab==="watch"&&selectedVideo?`Watch ${selectedVideo.title} on Kivora through the official YouTube player. Discover more Shorts and related videos.`:"Kivora is a Shorts-first entertainment discovery platform powered by official YouTube embeds.";
+   const canonical=`${base}/`;
+   const title=category!=="all"?`${category[0].toUpperCase()+category.slice(1)} Shorts | Kivora`:"Kivora | Shorts";
+   const description="Kivora is a dedicated vertical Shorts experience powered by official YouTube embeds.";
    document.title=title;
    const setMeta=(selector,attrs,content)=>{let el=document.head.querySelector(selector);if(!el){el=document.createElement("meta");Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,v));document.head.appendChild(el);}el.setAttribute("content",content)};
    setMeta('meta[name="description"]',{name:"description"},description);
    setMeta('meta[property="og:title"]',{property:"og:title"},title);
    setMeta('meta[property="og:description"]',{property:"og:description"},description);
-   setMeta('meta[property="og:type"]',{property:"og:type"},tab==="watch"?"video.other":"website");
+   setMeta('meta[property="og:type"]',{property:"og:type"},"website");
    setMeta('meta[property="og:url"]',{property:"og:url"},canonical);
    setMeta('meta[property="og:site_name"]',{property:"og:site_name"},"Kivora");
-   if(tab==="watch"&&selectedVideo?.thumb)setMeta('meta[property="og:image"]',{property:"og:image"},selectedVideo.thumb);
    setMeta('meta[name="twitter:card"]',{name:"twitter:card"},"summary_large_image");
    setMeta('meta[name="twitter:title"]',{name:"twitter:title"},title);
    setMeta('meta[name="twitter:description"]',{name:"twitter:description"},description);
@@ -318,7 +307,6 @@ function App(){
   {!user&&<section className="welcome"><div><small>WELCOME TO KIVORA</small><h2>Watch first. Decide later.</h2><p>Start instantly as a guest, or connect Google to keep your Kivora activity across devices.</p></div><div className="welcomeActions"><button className="primary" onClick={guest} disabled={busy}>Start watching</button><button onClick={google} disabled={busy}>Continue with Google</button></div></section>}
 
   <main>
-   {tab==="watch"&&selectedVideo&&<VideoWatchPage video={selectedVideo} relatedVideos={videos} sponsored={sponsored} user={user} isPro={premium} onNotice={setNotice} onBack={()=>go("home")} onOpenVideo={openVideo}/>}
    {tab==="home"&&<>
     <nav className="categoryNav" aria-label="Video categories">{[
       ["suggested","Suggested"],["all","All"],["new","New"],["hollywood","Hollywood"],
@@ -346,7 +334,7 @@ function App(){
       return cards;
     })()}</div>
     <div ref={feedSentinelRef} className="feedSentinel" aria-live="polite">{loadingMore&&<><span className="feedSpinner"/>Finding more movies…</>}{!loadingMore&&!hasMore&&videos.length>0&&<span>You've reached the end of the currently available results.</span>}</div>
-    <details className="sourceNote sourceDetails"><summary><b>How Kivora's feed works</b></summary><p>Suggested videos combine public YouTube engagement signals with Kivora viewer ratings. New sorts by publication date. The feed is Shorts-first: only eligible videos up to 180 seconds are shown. Long-form videos are excluded server-side. Sponsored placements are video-only and clearly labelled. Sponsored placements are clearly labelled and inserted into the same FYP flow as other content.</p></details>
+    <details className="sourceNote sourceDetails"><summary><b>How Kivora's feed works</b></summary><p>The Kivora FYP is a dedicated vertical Shorts viewer: one eligible Short per viewport, automatic playback on entry, and snap scrolling. New sorts by publication date. The feed is Shorts-first: only eligible videos up to 180 seconds are shown. Long-form videos are excluded server-side. Sponsored placements are video-only and clearly labelled. Sponsored placements are clearly labelled and inserted into the same FYP flow as other content.</p></details>
     <details className="sourceNote sourceDetails"><summary><b>Subtitles & language</b></summary><p>Kivora can use the official YouTube player's caption system when a source video provides captions. You can turn captions on/off and choose a preferred caption language. YouTube decides which original or translated caption tracks are available; Kivora does not download or re-host caption files.</p></details>
     <details className="sourceNote sourceDetails"><summary><b>How Kivora gets videos</b></summary><p>Kivora uses official YouTube video IDs and metadata, then plays the creator's video through YouTube's official embedded player. The original source, creator and YouTube controls remain attributable to the source platform.</p><button onClick={()=>go("creators")}>Read our creator & rights policy →</button></details>
    </>}
@@ -526,10 +514,10 @@ function ShortsPlayer({video,onOpen,onNotice,ad=false,playbackKey="",campaignId=
      if(cancelled||!window.YT?.Player||!box.current||document.getElementById(id)?.dataset.loaded==="1")return;
      const el=document.getElementById(id); if(!el)return;
      el.dataset.loaded="1";
-     player.current=new window.YT.Player(id,{videoId:video.id,width:"100%",height:"100%",playerVars:{autoplay:0,controls:1,rel:0,playsinline:1,enablejsapi:1,iv_load_policy:3,origin:window.location.origin},events:{
-       onReady:()=>{if(cancelled)return;setReady(true);try{player.current.mute();if(visibleRef.current){player.current.playVideo();setPlaying(true)}}catch{}},
+     player.current=new window.YT.Player(id,{videoId:video.id,width:"100%",height:"100%",playerVars:{autoplay:1,controls:0,rel:0,playsinline:1,enablejsapi:1,iv_load_policy:3,disablekb:1,fs:0,origin:window.location.origin},events:{
+       onReady:()=>{if(cancelled)return;setReady(true);try{player.current.unMute();if(visibleRef.current){player.current.playVideo();setPlaying(true)}}catch{}},
        onStateChange:e=>{if(window.YT?.PlayerState&&e.data===window.YT.PlayerState.PLAYING){setPlaying(true);armImpression()}if(window.YT?.PlayerState&&[window.YT.PlayerState.PAUSED,window.YT.PlayerState.ENDED].includes(e.data)){setPlaying(false);disarmImpression()}},
-       onAutoplayBlocked:()=>onNotice?.("YouTube blocked automatic playback. Tap the video to start it.")
+       onAutoplayBlocked:()=>onNotice?.("Automatic playback was blocked by the browser. Keep Kivora open and allow autoplay for the best Shorts experience.")
      }});
    };
    loadYouTubeApi(start);
@@ -543,7 +531,7 @@ function ShortsPlayer({video,onOpen,onNotice,ad=false,playbackKey="",campaignId=
      const ratio=Number(entry.intersectionRatio||0);setVisibleRatio(ratio);
      const active=entry.isIntersecting&&ratio>=.72;visibleRef.current=active;
      if(!player.current||!ready){if(active&&isDrive)armImpression();else if(!active)disarmImpression();return;}
-     try{if(active){player.current.mute();player.current.playVideo();setPlaying(true);armImpression()}else{player.current.pauseVideo();setPlaying(false);disarmImpression()}}catch{}
+     try{if(active){player.current.unMute();player.current.playVideo();setPlaying(true);armImpression()}else{player.current.pauseVideo();setPlaying(false);disarmImpression()}}catch{}
    },{threshold:[0,.5,.72,.9],rootMargin:'0px'});
    observer.observe(node);return()=>{observer.disconnect();disarmImpression()};
  },[ready,isDrive]);
@@ -551,16 +539,14 @@ function ShortsPlayer({video,onOpen,onNotice,ad=false,playbackKey="",campaignId=
  async function share(){const url=`${window.location.origin}${window.location.pathname}?watch=${encodeURIComponent(video.id)}`;try{if(navigator.share)await navigator.share({title:video.title,text:`Watch ${video.title} on Kivora`,url});else{await navigator.clipboard?.writeText(url);onNotice?.("Short link copied.")}}catch{}}
  function toggleLike(){setLiked(v=>!v);onNotice?.(liked?"Like removed":"Liked")}
  function toggleSave(){setSaved(v=>!v);onNotice?.(saved?"Removed from saved":"Saved to Kivora")}
- function activate(){try{if(isDrive)return;if(!player.current)return;player.current.unMute();player.current.playVideo();setPlaying(true)}catch{onOpen?.(video)}}
- const embed= isDrive ? `https://drive.google.com/file/d/${encodeURIComponent(driveId)}/preview` : "";
+ const embed= isDrive ? `https://drive.google.com/file/d/${encodeURIComponent(driveId)}/preview?autoplay=1` : "";
  return <article className={`shortCard ${ad?"shortAdCard":""}`} ref={box} onDoubleClick={()=>!ad&&toggleLike()}>
-   <div className="shortPlayer" onClick={()=>{if(!playing&&!isDrive)activate()}}>
+   <div className="shortPlayer">
      {isDrive?<iframe className="shortYT shortDriveFrame" src={embed} title={video.title||"Sponsored video"} allow="autoplay; fullscreen" allowFullScreen onLoad={()=>{setReady(true);if(visibleRef.current)armImpression()}}/>:<div id={id} className="shortYT"/>}
-     <div className="shortTopline"><span>{ad?"SPONSORED":"FOR YOU"}</span><small>{isDrive?(ready?"Playing":"Loading"):(playing?"Playing":"Tap to play")}</small></div>
-     {!playing&&!isDrive&&<button className="shortPlayOverlay" onClick={e=>{e.stopPropagation();activate()}} aria-label="Play Short">▶</button>}
+     <div className="shortTopline"><span>{ad?"SPONSORED":"FOR YOU"}</span><small>{isDrive?(ready?"Playing":"Loading"):(playing?"Playing":"Autoplay")}</small></div>
      <div className="shortGradient" aria-hidden="true"/>
-     <div className="shortRail" onClick={e=>e.stopPropagation()}>{!ad&&<><button className={`shortRailButton ${liked?"active":""}`} onClick={toggleLike} aria-label={liked?"Unlike":"Like"}><span>♥</span><small>{liked?"Liked":"Like"}</small></button><button className={`shortRailButton ${saved?"active":""}`} onClick={toggleSave} aria-label={saved?"Unsave":"Save"}><span>＋</span><small>{saved?"Saved":"Save"}</small></button></>}<button className="shortRailButton" onClick={share} aria-label="Share"><span>↗</span><small>Share</small></button><button className="shortRailButton" onClick={()=>onOpen?.(video)} aria-label="Open video"><span>•••</span><small>More</small></button></div>
-     <div className="shortBottomInfo" onClick={e=>e.stopPropagation()}><div className="shortCreator"><span className="shortAvatar">{(video.channelTitle||"Y").slice(0,1).toUpperCase()}</span><b>{video.channelTitle||"YouTube"}</b>{!ad&&<button onClick={()=>onOpen?.(video)}>View</button>}</div><h2>{video.title}</h2><p>{formatDuration(video.durationSeconds)}{video.desc?` · ${video.desc.slice(0,120)}${video.desc.length>120?"…":""}`:""}</p>{ad&&<div className="shortAdMeta"><span>Sponsored video · Kivora ad</span>{isDrive?<small>Hosted by Google Drive · Kivora does not store the file</small>:<small>YouTube playback · YouTube may independently serve ads inside its player</small>}</div>}</div>
+     <div className="shortRail" onClick={e=>e.stopPropagation()}>{!ad&&<><button className={`shortRailButton ${liked?"active":""}`} onClick={toggleLike} aria-label={liked?"Unlike":"Like"}><span>♥</span><small>{liked?"Liked":"Like"}</small></button><button className={`shortRailButton ${saved?"active":""}`} onClick={toggleSave} aria-label={saved?"Unsave":"Save"}><span>＋</span><small>{saved?"Saved":"Save"}</small></button></>}<button className="shortRailButton" onClick={share} aria-label="Share"><span>↗</span><small>Share</small></button></div>
+     <div className="shortBottomInfo" onClick={e=>e.stopPropagation()}><div className="shortCreator"><span className="shortAvatar">{(video.channelTitle||"Y").slice(0,1).toUpperCase()}</span><b>{video.channelTitle||"YouTube"}</b></div><h2>{video.title}</h2><p>{formatDuration(video.durationSeconds)}{video.desc?` · ${video.desc.slice(0,120)}${video.desc.length>120?"…":""}`:""}</p>{ad&&<div className="shortAdMeta"><span>Sponsored video · Kivora ad</span>{isDrive?<small>Hosted by Google Drive · Kivora does not store the file</small>:<small>YouTube playback · YouTube may independently serve ads inside its player</small>}</div>}</div>
    </div>
    {ad&&video.promotionType==="app"&&video.site&&<a className="shortDestinationBanner" href={video.site} target="_blank" rel="noopener noreferrer"><span className="destinationIcon"><img src={video.siteIcon||`https://www.google.com/s2/favicons?domain=${encodeURIComponent(video.site)}&sz=128`} alt="" onError={e=>{e.currentTarget.style.display="none"}}/></span><span className="destinationCopy"><b>{video.destinationName||video.channelTitle||"Visit advertiser"}</b><small>{video.site.replace(/^https?:\/\//i,"").replace(/\/$/,"")}</small></span><strong>Open ↗</strong></a>}
  </article>
