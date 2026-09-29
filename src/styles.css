@@ -295,3 +295,107 @@ main:has(.shortCard) .shortCard:has(.shortDestinationBanner) .shortPlayer{height
 .shortDriveFrame{border:0;background:#000;display:block}.shortAdMeta small{display:block;opacity:.72;margin-top:3px}.campaignMonitor{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.campaignMonitor>div{border:1px solid var(--line);background:var(--surface2);border-radius:14px;padding:14px;display:grid;gap:5px}.campaignMonitor small{font-size:11px;color:var(--muted);font-weight:800;letter-spacing:.08em}.campaignMonitor b{font-size:20px}@media(max-width:700px){.campaignMonitor{grid-template-columns:1fr 1fr}}
 
 .campaignList{margin-top:28px;border-top:1px solid var(--line);padding-top:20px}.campaignRow{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:12px;padding:14px 0;border-top:1px solid var(--line)}.campaignRow>div{display:grid;gap:4px}.campaignRow span{font-size:13px;color:var(--muted)}@media(max-width:700px){.campaignRow{grid-template-columns:1fr}}
+
+/* Full-screen Shorts FYP: no Kivora chrome, no partial cards, no per-video "For You" badge. */
+.app:has(.shortCard) > .topbar { display:none !important; }
+.app:has(.shortCard) > footer { display:none !important; }
+.app:has(.shortCard) > .notifyPrompt { display:none !important; }
+.app:has(.shortCard) main { padding:0 !important; margin:0 !important; }
+.app:has(.shortCard) .categoryNav {
+  position:fixed !important;
+  top:0 !important;
+  left:0 !important;
+  right:0 !important;
+  height:58px !important;
+  z-index:50 !important;
+  display:flex !important;
+  align-items:center !important;
+  gap:7px !important;
+  padding:8px 10px !important;
+  overflow-x:auto !important;
+  background:linear-gradient(180deg,rgba(0,0,0,.72),rgba(0,0,0,0)) !important;
+  border:0 !important;
+  backdrop-filter:blur(7px) !important;
+  scrollbar-width:none !important;
+}
+.app:has(.shortCard) .categoryNav::-webkit-scrollbar { display:none; }
+.app:has(.shortCard) .categoryNav button {
+  flex:0 0 auto !important;
+  min-height:38px !important;
+  padding:7px 14px !important;
+  border:1px solid rgba(255,255,255,.18) !important;
+  background:rgba(0,0,0,.42) !important;
+  color:#fff !important;
+  box-shadow:none !important;
+  font-size:13px !important;
+  backdrop-filter:blur(10px) !important;
+}
+.app:has(.shortCard) .categoryNav button.active {
+  background:#fff !important;
+  color:#111 !important;
+  border-color:#fff !important;
+}
+.app:has(.shortCard) .discoverTools { display:none !important; }
+.app:has(.shortCard) .feed {
+  height:100svh !important;
+  max-height:none !important;
+  margin:0 !important;
+  padding:0 !important;
+  overflow-y:auto !important;
+  scroll-snap-type:y mandatory !important;
+  scroll-behavior:smooth;
+  overscroll-behavior-y:contain !important;
+}
+.app:has(.shortCard) .shortCard {
+  height:100svh !important;
+  min-height:100svh !important;
+  max-height:100svh !important;
+  width:100% !important;
+  margin:0 !important;
+  border:0 !important;
+  border-radius:0 !important;
+  scroll-snap-align:start !important;
+  scroll-snap-stop:always !important;
+}
+.app:has(.shortCard) .shortPlayer {
+  height:100svh !important;
+  min-height:100svh !important;
+  max-height:100svh !important;
+  width:100% !important;
+  aspect-ratio:auto !important;
+}
+.app:has(.shortCard) .shortYT,
+.app:has(.shortCard) .shortYT iframe {
+  width:100% !important;
+  height:100% !important;
+  min-height:100% !important;
+  border:0 !important;
+  display:block !important;
+}
+/* Keep the video full-screen; the app/site CTA sits over the lower edge instead of pushing the video off-screen. */
+.app:has(.shortCard) .shortCard:has(.shortDestinationBanner) .shortPlayer { height:100svh !important; }
+.app:has(.shortCard) .shortDestinationBanner {
+  position:absolute !important;
+  left:12px !important;
+  right:12px !important;
+  bottom:16px !important;
+  z-index:12 !important;
+  margin:0 !important;
+  border:1px solid rgba(255,255,255,.18) !important;
+  border-radius:14px !important;
+  background:rgba(10,10,10,.78) !important;
+  color:#fff !important;
+  backdrop-filter:blur(14px) !important;
+}
+.app:has(.shortCard) .shortCard:has(.shortDestinationBanner) .shortBottomInfo { bottom:96px !important; }
+.app:has(.shortCard) .shortTopline { top:66px !important; }
+.app:has(.shortCard) .shortTopline span { background:rgba(0,0,0,.58) !important; }
+.app:has(.shortCard) .shortBottomInfo { bottom:18px !important; }
+.app:has(.shortCard) .shortRail { bottom:104px !important; }
+.app:has(.shortCard) .feedSentinel { min-height:0 !important; height:0 !important; padding:0 !important; margin:0 !important; overflow:hidden !important; }
+
+/* The home/FYP has no branded application bar. The category strip is the only header UI. */
+.app:has(.categoryNav) > .topbar { display:none !important; }
+.app:has(.categoryNav) .welcome { display:none !important; }
+.app:has(.categoryNav) .notifyPrompt { display:none !important; }
+.app:has(.categoryNav) > main { padding-top:0 !important; margin-top:0 !important; }

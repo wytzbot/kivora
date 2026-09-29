@@ -2,10 +2,8 @@ const EXCLUDED_PATTERNS = [
   /movie\s*recap/i, /film\s*recap/i, /\brecap\b/i,
   /movie\s*explained/i, /film\s*explained/i, /ending\s*explained/i,
   /movie\s*summary/i, /film\s*summary/i, /plot\s*summary/i,
-  /\breview\b/i, /\breaction\b/i, /\btrailer\b/i, /\bteaser\b/i,
-  /scene\s*(compilation|pack|collection)/i, /fan\s*edit/i,
-  /\bfull\s*scene\b/i, /\bmovie\s*clip\b/i, /\bfilm\s*clip\b/i,
-  /\bclips?\b/i, /\bhighlight(s)?\b/i,
+  /\btrailer\b/i, /\bteaser\b/i,
+  /full\s*movie/i, /full\s*film/i, /\bfull\s*episode/i,
   /\bfree\s*download\b/i, /\bwatch\s*for\s*free\s*download/i,
   /\bcracked\b/i, /\bmod\s*apk\b/i, /telegram/i, /whatsapp\s*group/i
 ];
@@ -40,20 +38,44 @@ function isEligibleShort(item) {
 
 function industryQueries(category) {
   const q = {
-    all: ["action shorts #shorts", "movie scene shorts #shorts", "entertainment shorts #shorts"],
-    suggested: ["best action shorts #shorts", "viral movie shorts #shorts"],
-    new: ["new shorts #shorts", "new action shorts #shorts"],
-    hollywood: ["Hollywood shorts #shorts", "Hollywood action shorts #shorts"],
-    bollywood: ["Bollywood shorts #shorts", "Hindi movie shorts #shorts"],
-    chinese: ["Chinese shorts #shorts", "Chinese action shorts #shorts"],
-    korean: ["Korean shorts #shorts", "Korean action shorts #shorts"],
-    japanese: ["Japanese shorts #shorts", "Japanese action shorts #shorts"],
-    nollywood: ["Nollywood shorts #shorts", "Nigerian movie shorts #shorts"],
-    southindian: ["South Indian shorts #shorts", "Tamil Telugu shorts #shorts"],
-    thai: ["Thai shorts #shorts", "Thai action shorts #shorts"],
-    indonesian: ["Indonesian shorts #shorts", "Indonesian action shorts #shorts"]
+    all: ["shorts #shorts", "viral shorts #shorts", "interesting shorts #shorts"],
+    suggested: ["trending shorts #shorts", "viral shorts #shorts"],
+    comedy: ["comedy shorts #shorts", "funny shorts #shorts", "standup comedy shorts #shorts"],
+    tech: ["tech shorts #shorts", "technology shorts #shorts", "coding tech shorts #shorts"],
+    adventure: ["adventure shorts #shorts", "adventure travel shorts #shorts", "exploration shorts #shorts"],
+    science: ["science shorts #shorts", "space science shorts #shorts", "physics science shorts #shorts"],
+    finance: ["finance shorts #shorts", "personal finance shorts #shorts", "investing finance shorts #shorts"],
+    education: ["education shorts #shorts", "learning shorts #shorts", "educational shorts #shorts"],
+    gaming: ["gaming shorts #shorts", "game shorts #shorts", "esports shorts #shorts"],
+    sports: ["sports shorts #shorts", "football shorts #shorts", "basketball shorts #shorts"],
+    food: ["food shorts #shorts", "cooking shorts #shorts", "recipe shorts #shorts"],
+    music: ["music shorts #shorts", "music performance shorts #shorts", "dance shorts #shorts"],
+    beauty: ["beauty shorts #shorts", "fashion shorts #shorts", "makeup shorts #shorts"],
+    new: ["new shorts #shorts", "latest shorts #shorts"]
   };
   return q[category] || q.all;
+}
+
+const CATEGORY_TERMS = {
+  comedy: /\b(comedy|funny|humor|humour|standup|stand-up|joke|skit|parody|satire)\b/i,
+  tech: /\b(tech|technology|coding|programming|software|developer|ai|robot|computer|phone|smartphone|gadget)\b/i,
+  adventure: /\b(adventure|explore|exploration|hiking|camping|expedition|survival|travel|safari|climb|climbing)\b/i,
+  science: /\b(science|physics|chemistry|biology|space|astronomy|nasa|experiment|quantum|engineering)\b/i,
+  finance: /\b(finance|financial|money|investing|investment|stocks?|shares|crypto|bitcoin|forex|budget|saving|savings|business|entrepreneur|economy|economics)\b/i,
+  education: /\b(education|educational|learn|learning|lesson|study|school|knowledge|history|language|math|mathematics)\b/i,
+  gaming: /\b(gaming|gamer|gameplay|esports|minecraft|fortnite|roblox|playstation|xbox|nintendo|game)\b/i,
+  sports: /\b(sport|sports|football|soccer|basketball|tennis|boxing|ufc|athletics|cricket|fifa|nba|nfl)\b/i,
+  food: /\b(food|cooking|recipe|chef|kitchen|baking|meal|restaurant|foodie)\b/i,
+  music: /\b(music|song|singer|dance|dancing|rapper|rap|guitar|piano|concert|performance)\b/i,
+  beauty: /\b(beauty|fashion|makeup|skincare|hair|hairstyle|style|outfit|cosmetic)\b/i
+};
+
+function matchesCategory(item, category) {
+  if (!category || ["all", "suggested", "new"].includes(category)) return true;
+  const re = CATEGORY_TERMS[category];
+  if (!re) return true;
+  const s=item?.snippet || {};
+  return re.test(`${s.title || ""} ${s.description || ""} ${s.channelTitle || ""}`);
 }
 
 export default async function handler(req, res) {
@@ -84,7 +106,7 @@ export default async function handler(req, res) {
       const item = data?.items?.[0];
       if (!item) return res.status(404).json({error:"Video not found on YouTube."});
       const durationSeconds = parseDuration(item.contentDetails?.duration || "");
-      if (!isEligibleShort({snippet:item.snippet,contentDetails:{durationSeconds}})) {
+      if (!isEligibleShort({snippet:item.snippet,contentDetails:{durationSeconds},player:{embedWidth:Number(item.player?.embedWidth||0),embedHeight:Number(item.player?.embedHeight||0)}})) {
         return res.status(404).json({error:"Kivora only plays eligible Shorts in this feed."});
       }
       return res.status(200).json({

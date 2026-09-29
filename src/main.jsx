@@ -308,12 +308,12 @@ function App(){
 
   <main>
    {tab==="home"&&<>
-    <nav className="categoryNav" aria-label="Video categories">{[
-      ["suggested","Suggested"],["all","All"],["new","New"],["hollywood","Hollywood"],
-      ["bollywood","Bollywood"],["chinese","Chinese"],["korean","Korean"],["japanese","Japanese"],
-      ["nollywood","Nollywood"],["southindian","South Indian"],["thai","Thai"],["indonesian","Indonesian"]
+    <nav className="categoryNav" aria-label="Shorts categories">{[
+      ["all","For You"],["comedy","Comedy"],["tech","Tech"],["adventure","Adventure"],
+      ["science","Science"],["finance","Finance"],["education","Education"],["gaming","Gaming"],["sports","Sports"],
+      ["food","Food"],["music","Music"],["beauty","Beauty"],["new","New"]
     ].map(([key,label])=><button key={key} className={category===key?"active":""} onClick={()=>{setCategory(key);setQuery("")}}>{label}</button>)}</nav>
-    <section className="discoverTools"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search movies, shows, creators…" aria-label="Search Kivora videos"/><span>{query?"Search results":"Shorts ranked using engagement and viewer ratings."}</span></section>
+    <section className="discoverTools"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search Shorts…" aria-label="Search Kivora Shorts"/><span>{query?"Search results":"Choose a category to personalize this Shorts feed."}</span></section>
     {videoLoading&&<section className="sourceNote"><b>Finding videos…</b><p>Kivora is loading live YouTube discovery results.</p></section>}
     {videoError&&<section className="sourceNote"><b>Video discovery notice</b><p>{videoError}</p>{query.trim()&&<button onClick={()=>setQuery("")}>Back to Discover</button>}</section>}
     <div className="feed">{(()=>{
@@ -543,7 +543,7 @@ function ShortsPlayer({video,onOpen,onNotice,ad=false,playbackKey="",campaignId=
  return <article className={`shortCard ${ad?"shortAdCard":""}`} ref={box} onDoubleClick={()=>!ad&&toggleLike()}>
    <div className="shortPlayer">
      {isDrive?<iframe className="shortYT shortDriveFrame" src={embed} title={video.title||"Sponsored video"} allow="autoplay; fullscreen" allowFullScreen onLoad={()=>{setReady(true);if(visibleRef.current)armImpression()}}/>:<div id={id} className="shortYT"/>}
-     <div className="shortTopline"><span>{ad?"SPONSORED":"FOR YOU"}</span><small>{isDrive?(ready?"Playing":"Loading"):(playing?"Playing":"Autoplay")}</small></div>
+     {ad&&<div className="shortTopline"><span>SPONSORED</span></div>}
      <div className="shortGradient" aria-hidden="true"/>
      <div className="shortRail" onClick={e=>e.stopPropagation()}>{!ad&&<><button className={`shortRailButton ${liked?"active":""}`} onClick={toggleLike} aria-label={liked?"Unlike":"Like"}><span>♥</span><small>{liked?"Liked":"Like"}</small></button><button className={`shortRailButton ${saved?"active":""}`} onClick={toggleSave} aria-label={saved?"Unsave":"Save"}><span>＋</span><small>{saved?"Saved":"Save"}</small></button></>}<button className="shortRailButton" onClick={share} aria-label="Share"><span>↗</span><small>Share</small></button></div>
      <div className="shortBottomInfo" onClick={e=>e.stopPropagation()}><div className="shortCreator"><span className="shortAvatar">{(video.channelTitle||"Y").slice(0,1).toUpperCase()}</span><b>{video.channelTitle||"YouTube"}</b></div><h2>{video.title}</h2><p>{formatDuration(video.durationSeconds)}{video.desc?` · ${video.desc.slice(0,120)}${video.desc.length>120?"…":""}`:""}</p>{ad&&<div className="shortAdMeta"><span>Sponsored video · Kivora ad</span>{isDrive?<small>Hosted by Google Drive · Kivora does not store the file</small>:<small>YouTube playback · YouTube may independently serve ads inside its player</small>}</div>}</div>

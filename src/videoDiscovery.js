@@ -7,24 +7,9 @@ const EXCLUDED_PATTERNS = [
   /movie\s*recap/i, /film\s*recap/i, /\brecap\b/i,
   /movie\s*explained/i, /film\s*explained/i, /ending\s*explained/i,
   /movie\s*summary/i, /film\s*summary/i, /plot\s*summary/i,
-  /\breview\b/i, /\breaction\b/i, /\btrailer\b/i, /\bteaser\b/i,
-  /\bshorts?\b/i, /top\s*\d+/i, /best\s+\d+/i,
-  /scene\s*(compilation|pack|collection)/i, /fan\s*edit/i,
-  /\bfull\s*scene\b/i, /\bmovie\s*clip\b/i, /\bfilm\s*clip\b/i,
-  /\bclips?\b/i, /\bhighlight(s)?\b/i,
-  /\bmusic\b/i, /\bmusic\s*video\b/i, /\bsong\b/i, /\blyrics?\b/i,
-  /\bafrobeats?\b/i, /\bconcert\b/i, /\bkaraoke\b/i,
-  /\bvlog\b/i, /\bday\s*in\s*my\s*life\b/i, /\blifestyle\b/i,
-  /\bbillionaire\b/i, /\bluxury\b/i, /\bsupercar(s)?\b/i, /\bcar\s*collection\b/i,
-  /\btravel\b/i, /\bcity\s*tour\b/i, /\bfood\b/i, /\bcooking\b/i,
-  /\bpodcast\b/i, /\binterview\b/i, /\bnews\b/i, /\bpolitics\b/i,
-  /\bgameplay\b/i, /\bgaming\b/i, /\bwalkthrough\b/i, /\btutorial\b/i,
-  /\bchallenge\b/i, /\bprank\b/i, /\breaction\b/i,
-  /\bepisode\s*\d+\b/i, /\bep\.?\s*\d+\b/i, /\bseason\s*\d+\b/i,
-  /full movie\s*\+\s*download/i, /telegram/i, /whatsapp\s*group/i,
-  /\bfree\s*download\b/i, /\bwatch\s*for\s*free\s*download/i,
-  /\bcracked\b/i, /\bmod\s*apk\b/i, /\bsubscribe\s*\d+\s*channels/i,
-  /movie\s*explanation/i, /film\s*explanation/i, /story\s*explained/i, /plot\s*explained/i, /movie\s*breakdown/i, /film\s*breakdown/i, /story\s*recap/i, /movie\s*commentary/i, /movie\s*discussion/i
+  /\btrailer\b/i, /\bteaser\b/i, /full\s*movie/i, /full\s*film/i,
+  /\bfree\s*download\b/i, /\bcracked\b/i, /\bmod\s*apk\b/i,
+  /telegram/i, /whatsapp\s*group/i
 ];
 
 const ACTION_PATTERNS = [
