@@ -29,7 +29,7 @@ Run **Actions → Build Kivora APK → Run workflow**, then download the `kivora
 ## Build locally
 
 ```bash
-npm install
+npm install --include=dev
 npm run build
 npm run android:setup
 cp /path/to/google-services.json android/app/
@@ -38,7 +38,7 @@ npm run android:prepare
 cd android && ./gradlew assembleDebug   # APK: app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Requires Node 22+, Java 21, Android SDK 36.
+Requires Node 22+, TypeScript 5.9+, Java 21, Android SDK 36.
 
 ## Known limits
 

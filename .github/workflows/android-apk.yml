@@ -34,7 +34,14 @@ jobs:
           node-version: 22
 
       - name: Install web dependencies
-        run: npm install
+        run: npm install --include=dev
+
+      - name: Verify Capacitor toolchain
+        run: |
+          node --version
+          npm --version
+          npx tsc --version
+          npx cap --version
 
       - name: Build Kivora web app
         env:
@@ -45,7 +52,12 @@ jobs:
         run: npm run build
 
       - name: Add Android platform
-        run: npx cap add android
+        run: |
+          # capacitor.config.json is the canonical config for this project.
+          # Remove stale generated TS/JS configs if a previous artifact ever leaks into the workspace.
+          rm -f capacitor.config.ts capacitor.config.js
+          test -f capacitor.config.json
+          npx cap add android
 
       # Needed for native Google sign-in. Create the Android app in the Firebase
       # console, download google-services.json and store it as this secret.

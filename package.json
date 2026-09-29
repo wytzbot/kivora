@@ -25,6 +25,7 @@
   "devDependencies": {
     "@capacitor/cli": "^8.0.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.9.2",
     "vite": "^7.0.0"
   },
   "engines": {
