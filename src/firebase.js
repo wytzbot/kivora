@@ -4,7 +4,7 @@ import { getAnalytics, isSupported } from "firebase/analytics";
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
   getRedirectResult, signInAnonymously, onAuthStateChanged,
-  linkWithPopup, linkWithRedirect, reauthenticateWithPopup, signOut
+  linkWithPopup, linkWithRedirect, signOut
 } from "firebase/auth";
 import {
   getFirestore, collection, doc, getDoc, setDoc, addDoc, updateDoc,
@@ -66,30 +66,7 @@ export async function signInWithGoogle(){
     throw e;
   }
 }
-export async function logOut(){youtubeAccessTokenCache="";youtubeAccessTokenAt=0;return signOut(auth);}
-let youtubeAccessTokenCache="";
-let youtubeAccessTokenAt=0;
-
-export async function getYouTubeAccessToken(force=false){
-  const current=auth.currentUser;
-  if(!current || current.isAnonymous) throw new Error("Connect Google before using YouTube actions.");
-  if(!force && youtubeAccessTokenCache && Date.now()-youtubeAccessTokenAt<45*60*1000) return youtubeAccessTokenCache;
-  const provider=new GoogleAuthProvider();
-  provider.addScope("https://www.googleapis.com/auth/youtube.force-ssl");
-  provider.setCustomParameters({prompt:"consent",access_type:"offline"});
-  try{
-    const result=await reauthenticateWithPopup(current,provider);
-    const credential=GoogleAuthProvider.credentialFromResult(result);
-    if(!credential?.accessToken) throw new Error("YouTube permission was not granted.");
-    youtubeAccessTokenCache=credential.accessToken;
-    youtubeAccessTokenAt=Date.now();
-    return youtubeAccessTokenCache;
-  }catch(e){
-    if(e?.code==="auth/popup-blocked") throw new Error("YouTube permission popup was blocked. Allow popups for Kivora and try again.");
-    if(e?.code==="auth/popup-closed-by-user") throw new Error("YouTube permission was cancelled.");
-    throw e;
-  }
-}
+export async function logOut(){return signOut(auth);}
 export {onAuthStateChanged};
 
 export async function getProEntitlement(user=auth.currentUser){

@@ -267,11 +267,3 @@ Ad impressions are viewer events, not advertiser events. The delivery endpoint a
 
 ## Shared Flutterwave webhook
 Kivora campaign checkout references start with `KIVORA-` and are handled by the existing WyDev Flutterwave webhook endpoint. The webhook verifies the transaction with Flutterwave, checks reference/amount/currency, then marks the matching Kivora campaign paid and ready. Kivora does not need a second Flutterwave webhook URL.
-
-## YouTube account actions in the Shorts FYP
-- FYP like/comment/save actions are sent to YouTube through OAuth 2.0; Kivora does not write those metrics to Firestore.
-- The first YouTube action re-authenticates the user's existing Google account with the YouTube Data API `youtube.force-ssl` scope. The short-lived access token is kept in memory only and is not stored in Firestore/localStorage.
-- Likes use `videos.rate`; comments use `commentThreads.insert`; saves use a private YouTube playlist named `Kivora Saves`.
-- Public YouTube view/like/comment counters are read from the YouTube Data API and refreshed after actions. Kivora does not persist those counters.
-- YouTube does not expose a public total "save count" for a video. `statistics.favoriteCount` is deprecated and always 0, so Kivora displays the user's Save state rather than inventing a total saves metric.
-- Enable the YouTube Data API v3 in the same Google Cloud project used by Kivora/Firebase and ensure the Google OAuth consent configuration allows the requested YouTube scope.

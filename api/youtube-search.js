@@ -119,11 +119,9 @@ export default async function handler(req, res) {
     }
   }
 
-  // One search request per feed/category keeps discovery fast and dramatically reduces
-  // YouTube API quota usage. The metadata/statistics request below enriches these results.
   const queries = q
     ? [`${q} #shorts -recap -explained -review -reaction -trailer`]
-    : [industryQueries(category)[0]];
+    : industryQueries(category);
 
   const pageTokens = queries.map((_, i) => {
     const value = Array.isArray(req.query?.[`pageToken${i}`]) ? req.query[`pageToken${i}`][0] : req.query?.[`pageToken${i}`];
@@ -175,20 +173,9 @@ export default async function handler(req, res) {
       const views = Number(st.viewCount || 0);
       const likes = Number(st.likeCount || 0);
       const comments = Number(st.commentCount || 0);
-      // YouTube's public counters are used as discovery signals; Kivora does not
-      // fabricate engagement. Log scaling prevents a single huge channel from
-      // completely dominating smaller, highly-engaged Shorts.
-      const likeRate = views ? likes / views : 0;
-      const commentRate = views ? comments / views : 0;
-      const engagementScore = Math.round((
-        Math.log10(views + 1) * 4 +
-        Math.log10(likes + 1) * 8 +
-        Math.log10(comments + 1) * 3 +
-        Math.min(12, likeRate * 1000) +
-        Math.min(6, commentRate * 10000)
-      ) * 100) / 100;
-      return { id, snippet: item.snippet, statistics: { viewCount: views, likeCount: likes, commentCount: comments }, contentDetails: { duration: cd.duration || "", durationSeconds, caption: cd.caption || "false" }, player:{embedWidth:Number(stats[id]?.player?.embedWidth||0),embedHeight:Number(stats[id]?.player?.embedHeight||0)}, engagementScore, likeRate, commentRate };
-    }).filter(item => isEligibleShort(item) && matchesCategory(item, category));
+      const engagementScore = Math.round((Math.log10(views + 1) * 6 + Math.log10(likes + 1) * 10 + Math.log10(comments + 1) * 4) * 100) / 100;
+      return { id, snippet: item.snippet, statistics: { viewCount: views, likeCount: likes, commentCount: comments }, contentDetails: { duration: cd.duration || "", durationSeconds, caption: cd.caption || "false" }, player:{embedWidth:Number(stats[id]?.player?.embedWidth||0),embedHeight:Number(stats[id]?.player?.embedHeight||0)}, engagementScore };
+    }).filter(isEligibleShort);
 
     return res.status(200).json({
       source: "youtube-data-api-v3",
