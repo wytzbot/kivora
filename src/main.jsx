@@ -138,6 +138,14 @@ function App(){
    const mq=window.matchMedia?.("(prefers-color-scheme: dark)"); const fn=()=>theme==="system"&&apply(); mq?.addEventListener?.("change",fn); return()=>mq?.removeEventListener?.("change",fn);
  },[theme]);
  useEffect(()=>{const fn=e=>{e.preventDefault();setInstallPrompt(e)};window.addEventListener("beforeinstallprompt",fn);return()=>window.removeEventListener("beforeinstallprompt",fn)},[]);
+ useEffect(()=>{
+   if(!("serviceWorker" in navigator) || !import.meta.env.PROD) return;
+   let registration;
+   navigator.serviceWorker.register("/service-worker.js",{scope:"/"}).then(r=>{registration=r;}).catch(err=>console.warn("Kivora offline support could not initialize:",err));
+   const onControllerChange=()=>{ /* A newly activated worker takes control on the next navigation. */ };
+   navigator.serviceWorker.addEventListener("controllerchange",onControllerChange);
+   return()=>{navigator.serviceWorker.removeEventListener("controllerchange",onControllerChange);};
+ },[]);
  useEffect(()=>{if(owner)setPremium(true)},[owner]);
  useEffect(()=>{let live=true;getProEntitlement(user).then(v=>{if(live)setPremium(v)});return()=>{live=false}},[user]);
  useEffect(()=>{
@@ -757,4 +765,35 @@ function Legal({page}){
 }
 function authMessage(e){const c=e?.code; if(c==="auth/credential-already-in-use"||c==="auth/account-exists-with-different-credential") return "This Google account already has a Kivora account. Signing you into that existing account instead."; if(c==="auth/popup-blocked") return "Google sign-in was blocked by the browser. Kivora will use the secure redirect sign-in instead."; return e?.message||"Sign-in could not be completed."}
 
-createRoot(document.getElementById("root")).render(<App/>);
+class StartupErrorBoundary extends React.Component {
+ constructor(props){ super(props); this.state={failed:false}; }
+ static getDerivedStateFromError(){ return {failed:true}; }
+ componentDidCatch(error,info){ console.error("Kivora UI startup/render error:",error,info); }
+ recover=async()=>{
+   try {
+     if ("serviceWorker" in navigator) {
+       const regs=await navigator.serviceWorker.getRegistrations();
+       await Promise.all(regs.map(reg=>reg.unregister()));
+     }
+     if ("caches" in window) {
+       const keys=await caches.keys();
+       await Promise.all(keys.filter(k=>k.startsWith("kivora-pwa-")).map(k=>caches.delete(k)));
+     }
+   } catch(e){ console.warn("Kivora recovery cleanup failed",e); }
+   window.location.reload();
+ };
+ render(){
+   if(this.state.failed) return <main style={{minHeight:"100dvh",display:"grid",placeItems:"center",padding:24,background:"#f7f7f2",color:"#171717",fontFamily:"system-ui,sans-serif"}}>
+     <section style={{maxWidth:420,width:"100%",padding:24,borderRadius:18,background:"#fff",boxShadow:"0 8px 32px #0001"}}>
+       <h1 style={{marginTop:0}}>Kivora couldn't start</h1>
+       <p>The app encountered a startup error. Your Google account has not been deleted. Refresh the app or reset its outdated offline cache and try again.</p>
+       <button onClick={()=>window.location.reload()} style={{padding:"12px 16px",border:0,borderRadius:10,marginRight:8}}>Reload app</button>
+       <button onClick={this.recover} style={{padding:"12px 16px",border:0,borderRadius:10}}>Reset offline cache</button>
+     </section>
+   </main>;
+   return this.props.children;
+ }
+}
+const rootElement=document.getElementById("root");
+if(rootElement) createRoot(rootElement).render(<StartupErrorBoundary><App/></StartupErrorBoundary>);
+
