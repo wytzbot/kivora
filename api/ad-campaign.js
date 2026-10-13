@@ -5,7 +5,6 @@ import { createHostedPayment } from '../functions/flutterwave.js';
 import { randomUUID } from 'node:crypto';
 
 const YOUTUBE_ID=/^[A-Za-z0-9_-]{6,}$/;
-const DRIVE_ID=/^[A-Za-z0-9_-]{20,}$/;
 const YOUTUBE_URL=/^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/)[A-Za-z0-9_-]{6,}/i;
 
 function parseYouTubeId(value=''){
@@ -13,12 +12,6 @@ function parseYouTubeId(value=''){
   if(YOUTUBE_ID.test(s)&&s.length<=20)return s;
   try{const u=new URL(s.startsWith('http')?s:`https://${s}`);if(u.hostname==='youtu.be'||u.hostname.endsWith('.youtu.be'))return u.pathname.split('/').filter(Boolean)[0]||'';if(u.hostname.includes('youtube.com'))return u.searchParams.get('v')||u.pathname.split('/').filter(Boolean).pop()||'';}catch{}
   return '';
-}
-function parseDriveId(value=''){
-  const s=String(value).trim();
-  if(DRIVE_ID.test(s)&&s.length>20)return s;
-  const m=s.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)([A-Za-z0-9_-]+)/i);
-  return m?.[1]||'';
 }
 async function verifyAsset(assetId){
   const yt=parseYouTubeId(assetId);
@@ -40,14 +33,7 @@ async function verifyAsset(assetId){
     if(item.status?.embeddable===false) throw new Error('This YouTube video does not allow embedding.');
     return {source:'youtube',assetId:yt,durationSeconds:duration,title:item.snippet?.title||'',channelTitle:item.snippet?.channelTitle||'',publishedAt:item.snippet?.publishedAt||'',embedWidth:width,embedHeight:height};
   }
-  const drive=parseDriveId(assetId);
-  if(drive){
-    // Kivora never downloads or stores this file. Playback uses Drive's hosted preview.
-    const r=await fetch(`https://drive.google.com/file/d/${drive}/preview`,{redirect:'follow',headers:{'user-agent':'Kivora-AdVerifier/1.0'}});
-    if(!r.ok) throw new Error('The Google Drive video could not be reached. Set the file to Anyone with the link and Viewer access.');
-    return {source:'drive',assetId:drive,durationSeconds:0};
-  }
-  throw new Error('Video must be a YouTube URL/ID or Google Drive file ID/link.');
+  throw new Error('Video must already be published on YouTube. Paste a valid YouTube Shorts/video URL or ID.');
 }
 
 async function createCampaign(req,res){

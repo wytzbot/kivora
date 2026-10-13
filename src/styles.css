@@ -399,3 +399,103 @@ main:has(.shortCard) .shortCard:has(.shortDestinationBanner) .shortPlayer{height
 .app:has(.categoryNav) .welcome { display:none !important; }
 .app:has(.categoryNav) .notifyPrompt { display:none !important; }
 .app:has(.categoryNav) > main { padding-top:0 !important; margin-top:0 !important; }
+
+
+/* Kivora Shorts-only feed refinement: keep each item inside a stable viewport. */
+main:has(.shortCard) .feed {
+  height:calc(100svh - 133px);
+  overflow-y:auto;
+  overflow-x:hidden;
+  overscroll-behavior-y:contain;
+  scroll-snap-type:y mandatory;
+  scroll-behavior:smooth;
+  scrollbar-width:none;
+}
+main:has(.shortCard) .feed::-webkit-scrollbar { display:none; }
+main:has(.shortCard) .shortCard {
+  position:relative;
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+  height:100%;
+  max-height:900px;
+  scroll-snap-align:start;
+  scroll-snap-stop:always;
+  overflow:hidden;
+  background:#050505!important;
+}
+main:has(.shortCard) .shortPlayer {
+  position:relative;
+  inset:auto;
+  flex:1 1 auto;
+  min-height:0;
+  width:100%;
+  height:auto;
+  max-height:none;
+  aspect-ratio:auto;
+}
+main:has(.shortCard) .shortYT {
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  background:#000;
+}
+main:has(.shortCard) .shortYT iframe {
+  position:absolute;
+  inset:0;
+  width:100%!important;
+  height:100%!important;
+  border:0;
+}
+.shortEngagement {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:5px 10px;
+  margin-top:7px;
+  font-size:10px;
+  line-height:1.25;
+  color:rgba(255,255,255,.95);
+}
+.shortEngagement span { white-space:nowrap; }
+.shortEngagement small {
+  width:100%;
+  font-size:9px;
+  opacity:.72;
+  letter-spacing:.015em;
+}
+.shortRail { bottom:118px; gap:11px; }
+.shortRailButton { width:50px!important;height:50px!important;min-width:50px!important;min-height:50px!important; }
+.shortRailButton small { max-width:48px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.shortBottomInfo { bottom:20px; }
+.shortDestinationBanner { position:relative;z-index:12;cursor:pointer; }
+.shortAdCard:has(.shortDestinationBanner) { padding-bottom:0; }
+main:has(.shortCard) .shortCard:has(.shortDestinationBanner) .shortPlayer {
+  position:relative;
+  inset:auto;
+  flex:1 1 auto;
+  width:100%;
+  height:auto;
+}
+main:has(.shortCard) .shortDestinationBanner { flex:0 0 62px; }
+@media (min-width:701px) {
+  main:has(.shortCard) .shortCard {
+    width:min(100%,520px);
+    margin:0 auto;
+    height:100%;
+    border-left:1px solid rgba(255,255,255,.08)!important;
+    border-right:1px solid rgba(255,255,255,.08)!important;
+  }
+  main:has(.shortCard) .feed { background:#111; }
+}
+@media (max-width:700px) {
+  .categoryNav { top:58px; }
+  main:has(.shortCard) .feed { height:calc(100svh - 118px); }
+  main:has(.shortCard) .shortCard { height:100%; min-height:0; }
+  .shortRail { right:10px;bottom:115px;gap:10px; }
+  .shortRailButton { width:46px!important;height:46px!important;min-width:46px!important;min-height:46px!important; }
+  .shortBottomInfo { left:12px;right:67px;bottom:16px; }
+  main:has(.shortCard) .shortCard:has(.shortDestinationBanner) .shortPlayer { height:auto; }
+  main:has(.shortCard) .shortDestinationBanner { flex-basis:60px; }
+}

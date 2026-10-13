@@ -81,7 +81,7 @@ function matchesCategory(item, category) {
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('Access-Control-Allow-Methods','GET,POST,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');
   if(req.method==='OPTIONS') return res.status(204).end();
-  res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=900");
+  res.setHeader("Cache-Control", "s-maxage=600, stale-while-revalidate=1800");
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
 
@@ -121,9 +121,15 @@ export default async function handler(req, res) {
     }
   }
 
-  const queries = q
-    ? [`${q} #shorts -recap -explained -review -reaction -trailer`]
-    : industryQueries(category);
+  // One search.list request per feed page is intentional: YouTube search.list
+  // costs 100 quota units per call. Category terms are chosen deterministically;
+  // the next page token continues the same query without multiplying quota use.
+  const categoryTerms = industryQueries(category);
+  const queries = [
+    q
+      ? `${q} #shorts -recap -explained -review -reaction -trailer`
+      : categoryTerms[0]
+  ];
 
   const pageTokens = queries.map((_, i) => {
     const value = Array.isArray(req.query?.[`pageToken${i}`]) ? req.query[`pageToken${i}`][0] : req.query?.[`pageToken${i}`];
@@ -155,10 +161,10 @@ export default async function handler(req, res) {
         const id=item?.id?.videoId;
         if(!id || seen.has(id)) return false;
         seen.add(id);
-        return true;
+        return matchesCategory(item, category);
       });
 
-    const ids = rawItems.map(item => item.id.videoId).slice(0, 50);
+    const ids = rawItems.map(item => item.id.videoId).slice(0, 25);
     let stats = {};
     if (ids.length) {
       const statParams = new URLSearchParams({ part: "statistics,contentDetails,player", id: ids.join(","), key, maxWidth: "1080", maxHeight: "1920" });

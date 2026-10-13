@@ -8,7 +8,7 @@ const youtube=/^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\
 
 export function validateAsset(format, asset){
  const value=(asset||'').trim();
- if(format==='video') return driveId.test(value)||driveUrl.test(value)||youtube.test(value);
+ if(format==='video') return youtube.test(value);
  return driveId.test(value)||/^https?:\/\//i.test(value);
 }
 

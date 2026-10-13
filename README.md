@@ -10,8 +10,7 @@ Kivora is a mobile-first, Shorts-first independent entertainment discovery web a
 - Videos use the official YouTube IFrame Player API.
 - Short videos automatically attempt to start with sound when at least 65% of the player reaches the viewport and pause when they leave. Browser autoplay policies may still block unmuted autoplay until the viewer interacts with the page. The feed is server-filtered to videos up to 180 seconds.
 - Kivora supplies its own mute/unmute and captions controls around the player.
-- Comments are disabled to reduce Firestore storage/read/write costs.
-- Kivora actions are separate from YouTube engagement: Like, Save and Share belong to Kivora.
+- YouTube view, like and comment counts are read from YouTube API responses and never written to Kivora storage. Like and comment buttons open the original YouTube Short for source-platform engagement; Save remains a separate Kivora feature.
 
 ## Notifications: one alert per 10 eligible new videos
 
@@ -43,8 +42,8 @@ The Pro entitlement is checked from a server-issued Firebase Auth custom claim (
 
 ## Advertising implementation notes
 
-- Kivora accepts either a YouTube source or a public Google Drive video source for sponsored Shorts. Google Drive files are embedded from Drive; Kivora does not download or store the audiovisual file.
-- Sponsored app/site campaigns require a destination URL and name. Short-only campaigns do not.
+- Sponsored video campaigns accept YouTube Shorts/video URLs only. The source must already be published on YouTube and pass server-side format and embedding checks.
+- Sponsored app/site campaigns require an HTTPS destination URL and name. Short-only campaigns use a YouTube destination.
 - Billing is $1 per 1,500 qualified impressions. A qualified exposure requires at least 2 seconds and at least 50% visibility.
 - Impression counters and campaign payment state are server-authoritative. Firestore client writes to `campaigns` and `impressionEvents` are disabled; server endpoints use Firebase Admin.
 - Configure `FIREBASE_SERVICE_ACCOUNT_JSON` and `FLW_SECRET_KEY` as Vercel server environment variables. Never put either secret in `VITE_*` variables.
@@ -94,13 +93,7 @@ The browser must never be the source of truth for billing, spend, impressions, c
 
 A server-side campaign record should retain the promotion type, destination fields, start date, duration, target impressions, verified payment state, moderation state and monitor state.
 
-## Drive assets
-
-Google Drive supports sharing by file ID and ACL/permission roles. For binary files such as images and videos, the Drive API can download content when the requesting principal has appropriate access; `webContentLink` may also be available for browser downloads. citeturn0search3turn0search4
-
-For production advertising, prefer a server-side asset validation step rather than blindly embedding arbitrary Drive URLs. This prevents broken assets and reduces the chance of billing a campaign that cannot actually render.
-
-## Creator/source policy
+## Sponsored asset policy\n\nSponsored video assets must be hosted on YouTube before campaign submission. Kivora stores the video ID and campaign metadata, never the video file. The official YouTube embed handles playback and source attribution.\n\n## Creator/source policy
 
 Kivora should store YouTube video IDs and permitted metadata, not audiovisual files. The official YouTube embedded player supplies the stream. Do not download, proxy, strip attribution from or re-host YouTube videos.
 
@@ -124,6 +117,8 @@ Never put a Flutterwave secret key in the frontend and never treat a client-side
 ## Anti-clash / reliability rules
 
 - Disable duplicate submits while an async operation is running.
+- Keep the Shorts feed viewport-stable with scroll snapping and a vertical/square player area; do not route feed taps into a separate description/watch page.
+- Limit discovery to one YouTube `search.list` call per feed request (100 quota units) plus one batched `videos.list` lookup for statistics/format verification; use shared cache headers and avoid per-card statistics calls except for sponsored items, whose endpoint is also cache-controlled.
 - Never charge from a client-side calculated amount.
 - Never let the browser increment the notification batch counter.
 - Never publish an arbitrary YouTube search result directly to the feed.
