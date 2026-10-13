@@ -766,9 +766,9 @@ function Legal({page}){
 function authMessage(e){const c=e?.code; if(c==="auth/credential-already-in-use"||c==="auth/account-exists-with-different-credential") return "This Google account already has a Kivora account. Signing you into that existing account instead."; if(c==="auth/popup-blocked") return "Google sign-in was blocked by the browser. Kivora will use the secure redirect sign-in instead."; return e?.message||"Sign-in could not be completed."}
 
 class StartupErrorBoundary extends React.Component {
- constructor(props){ super(props); this.state={failed:false}; }
- static getDerivedStateFromError(){ return {failed:true}; }
- componentDidCatch(error,info){ console.error("Kivora UI startup/render error:",error,info); }
+ constructor(props){ super(props); this.state={failed:false,errorMessage:"",componentStack:""}; }
+ static getDerivedStateFromError(error){ return {failed:true,errorMessage:String(error?.message||error||"Unknown rendering error")}; }
+ componentDidCatch(error,info){ console.error("Kivora UI startup/render error:",error,info); this.setState({errorMessage:String(error?.stack||error?.message||error||"Unknown rendering error"),componentStack:String(info?.componentStack||"")}); }
  recover=async()=>{
    try {
      if ("serviceWorker" in navigator) {
@@ -786,7 +786,8 @@ class StartupErrorBoundary extends React.Component {
    if(this.state.failed) return <main style={{minHeight:"100dvh",display:"grid",placeItems:"center",padding:24,background:"#f7f7f2",color:"#171717",fontFamily:"system-ui,sans-serif"}}>
      <section style={{maxWidth:420,width:"100%",padding:24,borderRadius:18,background:"#fff",boxShadow:"0 8px 32px #0001"}}>
        <h1 style={{marginTop:0}}>Kivora couldn't start</h1>
-       <p>The app encountered a startup error. Your Google account has not been deleted. Refresh the app or reset its outdated offline cache and try again.</p>
+       <p>The app encountered a rendering error. Your Google account has not been deleted. Use the error details below to diagnose the problem.</p>
+       <pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontSize:12,background:"#f3f3f3",color:"#222",padding:12,borderRadius:8,maxHeight:180,overflow:"auto"}}>{this.state.errorMessage || "No error message captured."}{this.state.componentStack}</pre>
        <button onClick={()=>window.location.reload()} style={{padding:"12px 16px",border:0,borderRadius:10,marginRight:8}}>Reload app</button>
        <button onClick={this.recover} style={{padding:"12px 16px",border:0,borderRadius:10}}>Reset offline cache</button>
      </section>
