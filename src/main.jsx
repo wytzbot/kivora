@@ -347,8 +347,8 @@ function App(){
       const cards=[];
       const eligibleSponsored=sponsored.filter(item=>item.assetSource!=="drive");
       ranked.forEach((v,i)=>{
-        cards.push(<ShortsPlayer key={v.id} video={v} onOpen={openVideo} onNotice={setNotice}/>);
-        if(eligibleSponsored.length && (i===3 || (i>3 && (i-3)%6===0))){const ad=eligibleSponsored[Math.min(Math.floor(i/6),eligibleSponsored.length-1)];const adVideo={id:ad.assetSource==="drive"?ad.assetId:extractYouTubeId(ad.assetId||ad.youtubeUrl||""),source:ad.assetSource||"youtube",assetId:ad.assetId,title:ad.title||"Sponsored Short",channelTitle:ad.brand||"Advertiser",durationSeconds:Number(ad.durationSeconds||ad.duration||30),site:ad.site||"",destinationName:ad.destinationName||ad.brand||"",siteIcon:ad.siteIcon||"",promotionType:ad.promotionType||"short",};if(adVideo.id)cards.push(<ShortsPlayer key={`ad-${ad.id}-${i}`} video={adVideo} onNotice={setNotice} ad playbackKey={ad.id} campaignId={ad.id}/>);}
+        cards.push(<ShortsPlayer key={v.id} video={v} onOpen={openVideo} onNotice={setNotice} audioConsent={audioConsent}/>);
+        if(eligibleSponsored.length && (i===3 || (i>3 && (i-3)%6===0))){const ad=eligibleSponsored[Math.min(Math.floor(i/6),eligibleSponsored.length-1)];const adVideo={id:ad.assetSource==="drive"?ad.assetId:extractYouTubeId(ad.assetId||ad.youtubeUrl||""),source:ad.assetSource||"youtube",assetId:ad.assetId,title:ad.title||"Sponsored Short",channelTitle:ad.brand||"Advertiser",durationSeconds:Number(ad.durationSeconds||ad.duration||30),site:ad.site||"",destinationName:ad.destinationName||ad.brand||"",siteIcon:ad.siteIcon||"",promotionType:ad.promotionType||"short",};if(adVideo.id)cards.push(<ShortsPlayer key={`ad-${ad.id}-${i}`} video={adVideo} onNotice={setNotice} ad playbackKey={ad.id} campaignId={ad.id} audioConsent={audioConsent}/>);}
       });
       if(!cards.length&&!videoLoading)cards.push(<section className="emptyState" key="empty"><h3>No videos to show</h3><p>Try another category or search term.</p></section>);
       return cards;
@@ -499,7 +499,7 @@ function extractDriveId(value=""){
  return m?.[1]||"";
 }
 
-function ShortsPlayer({video,onOpen,onNotice,ad=false,playbackKey="",campaignId=""}){
+function ShortsPlayer({video,onOpen,onNotice,ad=false,playbackKey="",campaignId="",audioConsent=false}){
  const box=useRef(null),player=useRef(null),visibleRef=useRef(false),countedRef=useRef(false),impressionTimer=useRef(null),exposureKey=useRef(crypto.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`);
  const [ready,setReady]=useState(false),[playing,setPlaying]=useState(false),[liked,setLiked]=useState(false),[saved,setSaved]=useState(false),[visibleRatio,setVisibleRatio]=useState(0),[youtubeStats,setYoutubeStats]=useState(null);
  useEffect(()=>{
@@ -733,7 +733,7 @@ function SponsoredCard({campaign,onNotice}){
  const id=source==="drive"?campaign.assetId:extractYouTubeId(campaign.assetId||campaign.youtubeUrl||"");
  if(!id)return null;
  const video={id,source,assetId:campaign.assetId,title:campaign.title||"Sponsored Short",channelTitle:campaign.brand||"Advertiser",durationSeconds:Number(campaign.durationSeconds||30),site:campaign.site||"",destinationName:campaign.destinationName||campaign.brand||"",siteIcon:campaign.siteIcon||"",promotionType:campaign.promotionType||"short"};
- return <ShortsPlayer video={video} ad onNotice={onNotice} playbackKey={campaign.id} campaignId={campaign.id}/>;
+ return <ShortsPlayer video={video} ad onNotice={onNotice} playbackKey={campaign.id} campaignId={campaign.id} audioConsent={false}/>;
 }
 
 function extractYouTubeId(value=""){
