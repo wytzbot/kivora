@@ -537,3 +537,69 @@ main:has(.shortCard) .shortRail { bottom:clamp(140px, 22vh, 190px) !important; }
 .searchPage{max-width:720px;margin:28px auto;padding:clamp(20px,5vw,40px)}.searchPage h1{margin:8px 0}.searchPageForm{display:flex;gap:8px;margin:22px 0 14px}.searchPageForm input{flex:1;min-width:0}.searchSuggestions{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}.searchSuggestions button{border:1px solid var(--line);border-radius:999px;padding:9px 13px;background:var(--surface);color:var(--text)}
 .audioConsent{position:fixed;z-index:1000;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));max-width:700px;margin:auto;display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:16px;border:1px solid var(--line);border-radius:18px;background:var(--surface);color:var(--text);box-shadow:0 12px 48px #0005}.audioConsent>div{flex:1 1 100%;min-width:0}.audioConsent p{font-size:13px;line-height:1.45;margin:6px 0 0;color:var(--muted)}.audioConsent button{min-height:40px}
 @media(max-width:520px){.searchTopBtn span{display:none}.searchPageForm{flex-direction:column}.audioConsent{font-size:13px}}
+
+
+/* In-app YouTube comments: actions stay in Kivora while writes go to YouTube API. */
+.kivoraCommentsBackdrop{position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,.62);display:flex;align-items:flex-end;justify-content:center;padding:12px;}
+.kivoraCommentsSheet{width:min(100%,680px);max-height:min(78svh,760px);overflow:auto;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:22px 22px 16px 16px;padding:18px;box-shadow:0 20px 80px #0005;}
+.kivoraCommentsSheet>header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;}
+.kivoraCommentsSheet>header small{font-size:10px;letter-spacing:.1em;color:var(--muted);font-weight:900;}
+.kivoraCommentsSheet>header h3{margin:4px 0;font-size:20px;}
+.kivoraCommentsSheet>header button{font-size:26px;min-width:42px;min-height:42px;border-radius:50%;}
+.kivoraCommentsSheet form{display:grid;gap:9px;margin-bottom:14px;}
+.kivoraCommentsSheet textarea{width:100%;min-height:76px;resize:vertical;border:1px solid var(--line);border-radius:13px;padding:12px;background:var(--surface2);color:var(--text);font:inherit;}
+.kivoraCommentList{display:grid;gap:10px;}
+.kivoraCommentList article{padding:11px 0;border-bottom:1px solid var(--line);}
+.kivoraCommentList article b{font-size:13px;}
+.kivoraCommentList article p{font-size:14px;line-height:1.45;white-space:pre-wrap;margin:5px 0 0;}
+.shortBottomInfo{max-height:42%;overflow:hidden;}
+.shortBottomInfo p{-webkit-line-clamp:3!important;}
+@media(max-height:700px){.shortBottomInfo{max-height:36%;}.shortBottomInfo .shortEngagement{display:none;}}
+
+
+/* Stability pass: use the live viewport on mobile and keep every Short's metadata
+   inside its own snap page, including devices with dynamic browser/system bars. */
+main:has(.shortCard) .feed {
+  height: calc(100dvh - 58px - env(safe-area-inset-bottom, 0px));
+  scroll-padding-block: 0;
+}
+main:has(.shortCard) .shortCard {
+  height: calc(100dvh - 58px - env(safe-area-inset-bottom, 0px));
+  min-height: 0;
+  contain: layout paint style;
+}
+main:has(.shortCard) .shortPlayer {
+  height: 100%;
+  min-height: 0;
+}
+.shortBottomInfo {
+  bottom: max(14px, env(safe-area-inset-bottom, 0px));
+  max-height: min(42%, 300px);
+  overflow: hidden;
+}
+.shortBottomInfo h2 {
+  overflow-wrap: anywhere;
+}
+.shortBottomInfo p {
+  -webkit-line-clamp: 3;
+  overflow-wrap: anywhere;
+}
+.shortEngagement {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 9px;
+  align-items: center;
+  margin-top: 5px;
+  font-size: 10px;
+  line-height: 1.25;
+}
+.shortEngagement small { opacity: .72; }
+.shortRail { bottom: max(112px, calc(env(safe-area-inset-bottom, 0px) + 100px)); }
+@media (max-height: 700px) {
+  .shortBottomInfo { max-height: 36%; }
+  .shortCreator { margin-bottom: 4px; }
+  .shortBottomInfo h2 { -webkit-line-clamp: 2; font-size: 15px!important; }
+  .shortBottomInfo p { -webkit-line-clamp: 2; }
+  .shortRail { gap: 7px; bottom: max(92px, calc(env(safe-area-inset-bottom, 0px) + 84px)); }
+  .shortRailButton { width: 44px!important; height: 44px!important; min-width:44px!important; min-height:44px!important; }
+}

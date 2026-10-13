@@ -12,6 +12,20 @@ async function yt(url,options={}){
  return d;
 }
 
+
+async function verifyTokenBelongsToUser(accessToken, firebaseUser){
+ const r=await fetch('https://www.googleapis.com/oauth2/v3/userinfo',{headers:{Authorization:`Bearer ${accessToken}`,Accept:'application/json'}});
+ const profile=await r.json().catch(()=>({}));
+ if(!r.ok||!profile.sub) throw Object.assign(new Error('Your Google/YouTube permission is expired or missing. Reconnect Google and approve YouTube access.'),{statusCode:401});
+ const googleProvider=(firebaseUser?.firebase?.sign_in_provider==='google') || Boolean(firebaseUser?.email);
+ const providerUid=String(firebaseUser?.uid||'');
+ const emailMatch=String(profile.email||'').toLowerCase()===String(firebaseUser?.email||'').toLowerCase();
+ // Firebase uid normally equals Google sub for a Google-only account. If email is not
+ // exposed by the access token, require matching subject rather than accepting any token.
+ if(!googleProvider||(!emailMatch&&profile.sub!==providerUid)) throw Object.assign(new Error('The YouTube account does not match the signed-in Google account. Sign in with the same account and retry.'),{statusCode:403});
+ return profile;
+}
+
 async function publicStats(videoId){
  const key=process.env.YOUTUBE_API_KEY;
  if(!key)return {};
@@ -90,9 +104,10 @@ export default async function handler(req,res){
    if(!videoId)return res.status(400).json({error:'A valid YouTube videoId is required.'});
    if(req.method==='GET')return res.status(200).json(await listComments(videoId,String(req.query?.pageToken||'')));
    if(req.method!=='POST')return res.status(405).json({error:'Method not allowed.'});
-   await requireUser(req);
+   const firebaseUser=await requireUser(req);
    const accessToken=String(req.body?.accessToken||'').trim();
    if(!accessToken)return res.status(401).json({error:'YouTube permission is required. Connect your YouTube account first.'});
+   await verifyTokenBelongsToUser(accessToken,firebaseUser);
    const action=String(req.body?.action||'').trim().toLowerCase();
    if(action==='like'){
      const before=await getRating(videoId,accessToken);

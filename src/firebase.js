@@ -5,7 +5,7 @@ import { getAnalytics, isSupported } from "firebase/analytics";
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
   getRedirectResult, signInAnonymously, onAuthStateChanged, signInWithCredential,
-  linkWithPopup, linkWithRedirect, signOut
+  linkWithPopup, linkWithRedirect, reauthenticateWithPopup, signOut
 } from "firebase/auth";
 import {
   getFirestore, collection, doc, getDoc, setDoc, addDoc, updateDoc,
@@ -86,6 +86,22 @@ export async function signInWithGoogle(){
     }
     throw e;
   }
+}
+export async function getYouTubeAccessToken(){
+  const cached=sessionStorage.getItem("kivora-youtube-access-token");
+  if(cached) return cached;
+  const user=auth.currentUser;
+  if(!user||user.isAnonymous) throw new Error("Sign in with Google to use YouTube actions.");
+  if(isNative) throw new Error("YouTube action authorization must be refreshed in the web sign-in flow. Open Kivora in Chrome and sign in with Google again.");
+  const provider=new GoogleAuthProvider();
+  provider.setCustomParameters({prompt:"consent select_account"});
+  provider.addScope("https://www.googleapis.com/auth/youtube.force-ssl");
+  provider.addScope("https://www.googleapis.com/auth/youtube.readonly");
+  const result=await reauthenticateWithPopup(user,provider);
+  const credential=GoogleAuthProvider.credentialFromResult(result);
+  if(!credential?.accessToken) throw new Error("Google did not return a YouTube access token. Check OAuth consent and authorized domains.");
+  sessionStorage.setItem("kivora-youtube-access-token",credential.accessToken);
+  return credential.accessToken;
 }
 export async function logOut(){sessionStorage.removeItem("kivora-youtube-access-token");return signOut(auth);}
 export {onAuthStateChanged};
