@@ -1,9 +1,10 @@
 import { isKivoraOwnerEmail } from "./access.js";
 
 // Server-authoritative advertising billing.
-// Kivora video placements: $1.00 per 1,500 qualified video impressions.
+// Kivora video placements: $1.00 (about ₦1,300) per campaign block, targeting an estimated 3,000–4,500 qualified impressions.
 // A qualified impression requires meaningful viewability; raw iframe loads are not billable.
-export const IMPRESSION_BLOCK_SIZE = 1500;
+export const IMPRESSION_BLOCK_SIZE = 4500;
+export const MIN_TARGET_IMPRESSIONS = 3000;
 export const VIDEO_PRICE_PER_BLOCK_USD = 1.00;
 export const PRICE_PER_BLOCK_USD = VIDEO_PRICE_PER_BLOCK_USD;
 export const AD_VIEW_QUALIFICATION_SECONDS = 2;
@@ -12,7 +13,7 @@ export const AD_FREQUENCY_CAP_PER_SESSION = 1;
 export const MAX_TARGET_IMPRESSIONS = 100000000;
 // Display/checkout reference rate. Keep this configurable on the server so Flutterwave
 // can be charged in the chosen currency after server-side verification.
-export const USD_TO_NGN_RATE = Number(process.env.KIVORA_USD_NGN_RATE || 1330);
+export const USD_TO_NGN_RATE = Number(process.env.KIVORA_USD_NGN_RATE || 1300);
 
 export function usdToNgn(usd) {
   return Math.round(Number(usd || 0) * USD_TO_NGN_RATE);
@@ -67,8 +68,8 @@ export function calculateBillForUser({ targetImpressions, authenticatedEmail, fo
 export function calculateBill({ targetImpressions, format = "video" }) {
   if (format !== "video") throw new Error("Kivora only supports video advertising.");
   const impressions = Number(targetImpressions);
-  if (!Number.isInteger(impressions) || impressions < IMPRESSION_BLOCK_SIZE || impressions > MAX_TARGET_IMPRESSIONS) {
-    throw new Error(`Target impressions must be a whole number from ${IMPRESSION_BLOCK_SIZE.toLocaleString()} to ${MAX_TARGET_IMPRESSIONS.toLocaleString()}.`);
+  if (!Number.isInteger(impressions) || impressions < MIN_TARGET_IMPRESSIONS || impressions > MAX_TARGET_IMPRESSIONS) {
+    throw new Error(`Target impressions must be a whole number from ${MIN_TARGET_IMPRESSIONS.toLocaleString()} to ${MAX_TARGET_IMPRESSIONS.toLocaleString()}.`);
   }
   const blocks = Math.ceil(impressions / IMPRESSION_BLOCK_SIZE);
   const billableImpressions = blocks * IMPRESSION_BLOCK_SIZE;
@@ -114,7 +115,7 @@ export function updateAdMonitor(campaign, event = {}) {
     targetImpressions: target,
     remainingImpressions: Math.max(0, target - nextImpressions),
     budgetRemaining: target ? Number(Math.max(0, (target - nextImpressions) / IMPRESSION_BLOCK_SIZE * priceForFormat(format)).toFixed(4)) : null,
-    spendPer1500: priceForFormat(format),
+    spendPer4500: priceForFormat(format),
     qualifiedImpressionRate: priceForFormat(format) / IMPRESSION_BLOCK_SIZE
   };
   next.monitorStatus = target && nextImpressions >= target ? "impression_target_reached" : "running";

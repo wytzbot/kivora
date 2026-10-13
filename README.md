@@ -44,7 +44,7 @@ The Pro entitlement is checked from a server-issued Firebase Auth custom claim (
 
 - Sponsored video campaigns accept YouTube Shorts/video URLs only. The source must already be published on YouTube and pass server-side format and embedding checks.
 - Sponsored app/site campaigns require an HTTPS destination URL and name. Short-only campaigns use a YouTube destination.
-- Billing is $1 per 1,500 qualified impressions. A qualified exposure requires at least 2 seconds and at least 50% visibility.
+- Billing is $1 (about ₦1,300) per campaign targeting approximately 3,000–4,500 qualified impressions. A qualified exposure requires at least 2 seconds and at least 50% visibility.
 - Impression counters and campaign payment state are server-authoritative. Firestore client writes to `campaigns` and `impressionEvents` are disabled; server endpoints use Firebase Admin.
 - Configure `FIREBASE_SERVICE_ACCOUNT_JSON` and `FLW_SECRET_KEY` as Vercel server environment variables. Never put either secret in `VITE_*` variables.
 - Advertiser checkout uses Flutterwave's hosted checkout endpoint server-side, then verifies the transaction before changing a campaign to `ready`.
@@ -61,14 +61,14 @@ Before payment, Kivora performs a preflight check for:
 - supported video asset;
 - promotion type and required destination fields;
 - prohibited political/adult terms;
-- positive target impression count (minimum 1,500);
+- positive target impression count (minimum 3,000);
 - campaign duration (1–90 days);
 - start date and campaign pacing values;
 - required brand/title information.
 
 ### Pricing
 
-The video rate is **$1.00 per 1,500 qualified impressions**. Targets are rounded up to whole 1,500-impression billing blocks. For example, 1,500 impressions = $1.00, 3,000 = $2.00, and 4,500 = $3.00. The server recalculates the amount before payment; the browser is only a preview.
+The video rate is **$1.00 (about ₦1,300) per campaign targeting approximately 3,000–4,500 qualified impressions**. Targets are rounded up to whole 4,500-impression billing blocks, with a 3,000-impression minimum target. Actual delivery may vary within the estimated 3,000–4,500 impressions per $1 campaign range. The server recalculates the amount before payment; the browser is only a preview.
 
 A qualified impression requires at least **2 seconds of viewability at 50%+ visibility** and is intended to be counted once for the qualifying delivery event. Raw iframe loads, hidden players and ordinary page loads are not billable.
 
@@ -195,7 +195,7 @@ The endpoint filters discovery to embeddable/syndicated videos and returns norma
 - Videos expose secondary metadata inside an expandable “About this video” section.
 - Native-style actions include installable PWA support where the browser exposes the install prompt, device share, fullscreen playback and direct “Watch on YouTube” links.
 - Approved sponsored campaigns can appear in the FYP with a visible Sponsored label.
-- Advertising is video-only at $1.00 per 1,500 qualified impressions. App/site campaigns can optionally display a destination banner beneath the sponsored video.
+- Advertising is video-only at $1.00 (about ₦1,300) per campaign targeting approximately 3,000–4,500 qualified impressions. App/site campaigns can optionally display a destination banner beneath the sponsored video.
 
 
 ## Action-movie discovery update
@@ -237,7 +237,7 @@ Google authentication now signs directly into the selected Google account instea
 
 ## Shorts-only feed and video advertising
 
-Kivora no longer renders banner or rectangle ads. The feed accepts only eligible short-form videos up to 180 seconds, and sponsored delivery is video-only. A video ad impression is intended to become billable only after at least 2 seconds of playback while at least 50% of the ad player is visible; repeated raw loads are not treated as qualified delivery. The server-side ad engine uses $1.00 per 1,500 qualified impressions, caps delivered billing at the campaign target, and rejects non-video campaign formats.
+Kivora no longer renders banner or rectangle ads. The feed accepts only eligible short-form videos up to 180 seconds, and sponsored delivery is video-only. A video ad impression is intended to become billable only after at least 2 seconds of playback while at least 50% of the ad player is visible; repeated raw loads are not treated as qualified delivery. The server-side ad engine uses $1.00 (about ₦1,300) per campaign targeting approximately 3,000–4,500 qualified impressions, caps delivered billing at the campaign target, and rejects non-video campaign formats.
 
 
 ## Playback separation

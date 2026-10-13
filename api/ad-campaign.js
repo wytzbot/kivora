@@ -1,5 +1,5 @@
 import { adminDb, requireUser } from '../functions/server-auth.js';
-import { calculateBillForUser, validatePromotion, MAX_TARGET_IMPRESSIONS, IMPRESSION_BLOCK_SIZE, USD_TO_NGN_RATE } from '../functions/ad-engine.js';
+import { calculateBillForUser, validatePromotion, MAX_TARGET_IMPRESSIONS, IMPRESSION_BLOCK_SIZE, MIN_TARGET_IMPRESSIONS, USD_TO_NGN_RATE } from '../functions/ad-engine.js';
 import { validateAsset } from '../functions/moderation.js';
 import { createHostedPayment } from '../functions/flutterwave.js';
 import { randomUUID } from 'node:crypto';
@@ -42,7 +42,7 @@ async function createCampaign(req,res){
   validatePromotion({...b,promotionType});
   const target=Math.floor(Number(b.targetImpressions||0));
   const duration=Math.floor(Number(b.durationDays||b.duration||0));
-  if(!Number.isInteger(target)||target<IMPRESSION_BLOCK_SIZE||target>MAX_TARGET_IMPRESSIONS) throw new Error(`Target impressions must be between ${IMPRESSION_BLOCK_SIZE.toLocaleString()} and ${MAX_TARGET_IMPRESSIONS.toLocaleString()}.`);
+  if(!Number.isInteger(target)||target<MIN_TARGET_IMPRESSIONS||target>MAX_TARGET_IMPRESSIONS) throw new Error(`Target impressions must be between ${MIN_TARGET_IMPRESSIONS.toLocaleString()} and ${MAX_TARGET_IMPRESSIONS.toLocaleString()}.`);
   if(!Number.isInteger(duration)||duration<1||duration>90) throw new Error('Campaign duration must be 1–90 days.');
   const startDate=String(b.startDate||'').slice(0,10);
   if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw new Error('A valid campaign start date is required.');

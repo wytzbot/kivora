@@ -603,3 +603,17 @@ main:has(.shortCard) .shortPlayer {
   .shortRail { gap: 7px; bottom: max(92px, calc(env(safe-area-inset-bottom, 0px) + 84px)); }
   .shortRailButton { width: 44px!important; height: 44px!important; min-width:44px!important; min-height:44px!important; }
 }
+
+
+/* Quick actions menu attached to the Shorts rail. Backdrop closes on any outside touch. */
+.shortRail { z-index: 40; }
+.quickMenuDismiss { position: fixed; inset: 0; z-index: 45; border: 0; padding: 0; background: transparent; }
+.shortQuickMenu { position: absolute; right: 54px; bottom: 0; z-index: 46; width: min(230px, 68vw); max-height: min(62dvh, 420px); overflow-y: auto; padding: 7px; border: 1px solid rgba(255,255,255,.16); border-radius: 14px; background: rgba(18,20,26,.97); box-shadow: 0 12px 40px rgba(0,0,0,.4); backdrop-filter: blur(16px); }
+.shortQuickMenu button { display:block; width:100%; min-height:42px; padding:10px 12px; border:0; border-radius:8px; text-align:left; color:#fff; background:transparent; font:inherit; }
+.shortQuickMenu button:focus-visible,.shortQuickMenu button:hover { background:rgba(255,255,255,.12); outline:none; }
+.campaignComplete { color:#16a34a!important; font-weight:700; }
+.campaignStatus { color:var(--muted, #777); }
+/* Keep descriptions readable without changing the actual source video's duration. */
+.shortBottomInfo { max-height: min(45%, 330px); padding-bottom: max(8px, env(safe-area-inset-bottom, 0px)); }
+.shortBottomInfo p { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+.shortCard { scroll-snap-align:start; scroll-snap-stop:normal; }

@@ -22,7 +22,7 @@ Premium gets unlimited long-form subtitle translation. Translate accessible/auth
 
 ## Impression billing
 
-Ad billing is server-authoritative at $1.99 per 1,500 impressions. The requested target is rounded up to whole 1,500-impression blocks. Delivered spend is calculated from server-recorded impressions rather than accepting a client-supplied spend amount. Clicks are capped at impressions and cannot reduce or increase the bill.
+Ad billing is server-authoritative at $1.00 per up to 4,500 impressions. The requested target is rounded up to whole 4,500-impression blocks. Delivered spend is calculated from server-recorded impressions rather than accepting a client-supplied spend amount. Clicks are capped at impressions and cannot reduce or increase the bill.
 
 
 ## Shorts-only feed and engagement boundary
