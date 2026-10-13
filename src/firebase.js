@@ -25,6 +25,10 @@ export const auth=getAuth(app);
 export const db=getFirestore(app);
 export const googleProvider=new GoogleAuthProvider();
 googleProvider.setCustomParameters({prompt:"select_account"});
+// Request the YouTube permissions needed for likes, comments and playlist saves.
+// Google still shows its own consent screen; Firebase sign-in alone is not consent.
+googleProvider.addScope("https://www.googleapis.com/auth/youtube.force-ssl");
+googleProvider.addScope("https://www.googleapis.com/auth/youtube.readonly");
 
 if(typeof window!=="undefined") isSupported().then(ok=>ok&&getAnalytics(app)).catch(()=>{});
 
@@ -56,6 +60,7 @@ export async function signInWithGoogle(){
     const idToken = result?.credential?.idToken;
     if(!idToken) throw Object.assign(new Error("Google sign-in did not return a credential."),{code:"auth/invalid-credential"});
     const credential = GoogleAuthProvider.credential(idToken, result?.credential?.accessToken);
+    if(result?.credential?.accessToken) sessionStorage.setItem("kivora-youtube-access-token",result.credential.accessToken);
     return (await signInWithCredential(auth, credential)).user;
   }
   // Do not link an anonymous Firebase user to Google here. If that Google
@@ -64,7 +69,12 @@ export async function signInWithGoogle(){
   // Signing in directly lets Firebase switch the session to the existing
   // Google account cleanly. Anonymous watch-first access remains available
   // before login.
-  try { return (await signInWithPopup(auth,googleProvider)).user; }
+  try {
+    const result=await signInWithPopup(auth,googleProvider);
+    const credential=GoogleAuthProvider.credentialFromResult(result);
+    if(credential?.accessToken) sessionStorage.setItem("kivora-youtube-access-token",credential.accessToken);
+    return result.user;
+  }
   catch(e){
     if(["auth/popup-blocked","auth/operation-not-supported-in-this-environment","auth/cancelled-popup-request"].includes(e?.code)){
       await signInWithRedirect(auth,googleProvider); return null;
@@ -77,7 +87,7 @@ export async function signInWithGoogle(){
     throw e;
   }
 }
-export async function logOut(){return signOut(auth);}
+export async function logOut(){sessionStorage.removeItem("kivora-youtube-access-token");return signOut(auth);}
 export {onAuthStateChanged};
 
 export async function getProEntitlement(user=auth.currentUser){

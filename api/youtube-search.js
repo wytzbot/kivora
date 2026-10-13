@@ -70,11 +70,22 @@ const CATEGORY_TERMS = {
   beauty: /\b(beauty|fashion|makeup|skincare|hair|hairstyle|style|outfit|cosmetic)\b/i
 };
 
+const YOUTUBE_CATEGORY_IDS = {
+  comedy: ["23"], tech: ["28"], adventure: ["19"], science: ["28"],
+  finance: ["22", "27"], education: ["27"], gaming: ["20"], sports: ["17"],
+  food: ["26"], music: ["10"], beauty: ["26"],
+};
+
 function matchesCategory(item, category) {
   if (!category || ["all", "suggested", "new"].includes(category)) return true;
+  const s=item?.snippet || {};
+  // Prefer YouTube's own category classification when available. Search snippets
+  // don't always include categoryId, so use title/description/channel as fallback.
+  const official=String(s.categoryId || item?.categoryId || "");
+  const ids=YOUTUBE_CATEGORY_IDS[category] || [];
+  if (official && ids.includes(official)) return true;
   const re = CATEGORY_TERMS[category];
   if (!re) return true;
-  const s=item?.snippet || {};
   return re.test(`${s.title || ""} ${s.description || ""} ${s.channelTitle || ""}`);
 }
 
@@ -145,6 +156,8 @@ export default async function handler(req, res) {
         videoSyndicated: "true", videoDuration: "short", videoCaption: "any", key
       });
       if (pageTokens[queryIndex]) params.set("pageToken", pageTokens[queryIndex]);
+      const officialCategoryIds=YOUTUBE_CATEGORY_IDS[category]||[];
+      if(officialCategoryIds.length===1) params.set("videoCategoryId",officialCategoryIds[0]);
       const response = await fetch(`https://www.googleapis.com/youtube/v3/search?${params}`);
       const data = await response.json();
       if (!response.ok) {

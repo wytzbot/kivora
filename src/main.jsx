@@ -3,7 +3,7 @@ import {createRoot} from "react-dom/client";
 import "./styles.css";
 import { isLikelySpam, effectiveOriginality, canRecommend, isEligibleShort } from "./videoDiscovery";
 import {
- auth,db,startAnonymousSession,signInWithGoogle,finishGoogleRedirect,onAuthStateChanged,
+ auth,db,signInWithGoogle,finishGoogleRedirect,onAuthStateChanged,
  enablePushNotifications,toggleLike,saveVideo,logOut,getProEntitlement
 } from "./firebase";
 import {doc,getDoc,setDoc,serverTimestamp,runTransaction,collection,getDocs,query as fsQuery,limit,where} from "firebase/firestore";
@@ -102,7 +102,7 @@ function App(){
  const initialWatchId=useRef(new URLSearchParams(window.location.search).get("watch")||"");
  const [tab,setTab]=useState("home"),[premium,setPremium]=useState(false),[menu,setMenu]=useState(false);
  const [user,setUser]=useState(auth.currentUser),[busy,setBusy]=useState(false),[notice,setNotice]=useState("");
- const [notifyPrompt,setNotifyPrompt]=useState(true);
+ const [notifyPrompt,setNotifyPrompt]=useState(true),[audioConsent,setAudioConsent]=useState(()=>localStorage.getItem("kivora-audio-consent")==="granted"),[showAudioConsent,setShowAudioConsent]=useState(()=>!localStorage.getItem("kivora-audio-consent"));
  const [pendingNewVideos,setPendingNewVideos]=useState(0),[ratings,setRatings]=useState({}),[query,setQuery]=useState(""),[category,setCategory]=useState("all"),[videos,setVideos]=useState(EMPTY_VIDEOS),[pageTokens,setPageTokens]=useState([]),[hasMore,setHasMore]=useState(true),[loadingMore,setLoadingMore]=useState(false),[sponsored,setSponsored]=useState([]),[videoLoading,setVideoLoading]=useState(true),[videoError,setVideoError]=useState(""),[theme,setTheme]=useState(()=>localStorage.getItem("kivora-theme")||"system"),[installPrompt,setInstallPrompt]=useState(null),[selectedVideo,setSelectedVideo]=useState(null);
  const feedSentinelRef=useRef(null);
  const signedIn=!!user&&!user.isAnonymous;
@@ -142,9 +142,6 @@ function App(){
  useEffect(()=>{let live=true;getProEntitlement(user).then(v=>{if(live)setPremium(v)});return()=>{live=false}},[user]);
  useEffect(()=>{
    const off=onAuthStateChanged(auth,u=>setUser(u));
-   // Give guests an anonymous Kivora session so Like/Save are immediately interactive.
-   // Google sign-in can later link this session and keep the account history.
-   if(!auth.currentUser) startAnonymousSession().catch(()=>{});
    finishGoogleRedirect().then(r=>r?.user&&setNotice("Google sign-in complete.")).catch(e=>setNotice(authMessage(e)));
    return off;
  },[]);
@@ -210,7 +207,7 @@ function App(){
    return()=>observer.disconnect();
  },[videoLoading,loadingMore,hasMore,pageTokens,query,category]);
 
- async function guest(){setBusy(true);try{await startAnonymousSession();setNotice("You can start watching immediately.");}catch(e){setNotice(authMessage(e))}finally{setBusy(false)}}
+ async function guest(){await google()}
  async function google(){setBusy(true);try{const r=await signInWithGoogle();if(r)setNotice("Google sign-in complete.");}catch(e){setNotice(authMessage(e))}finally{setBusy(false)}}
  async function notifications(){
    if(busy)return;
@@ -292,6 +289,7 @@ function App(){
   <header className="topbar">
    <button className="brand" onClick={()=>go("home")}>Kivora</button>
    <div className="topActions">
+    <button className="searchTopBtn" onClick={()=>{go("search");setTimeout(()=>document.getElementById("kivora-search-input")?.focus(),50)}} aria-label="Search videos" title="Search videos">⌕ <span>Search</span></button>
     <button className="menuBtn" aria-label="Open menu" onClick={()=>setMenu(!menu)}>☰ <span>Menu</span></button>
     {!signedIn&&<button className="signinMini" onClick={google} disabled={busy}>Sign in</button>}
     {signedIn&&<button className="avatar accountAvatar" onClick={()=>go("account")} aria-label={`Account: ${user.email||"Google account"}`} title={user.email||"Google account"}>{user.photoURL?<img src={user.photoURL} alt=""/>:<span>{(user.email||"K").trim().slice(0,1).toUpperCase()}</span>}</button>}
@@ -315,16 +313,18 @@ function App(){
   {notifyPrompt&&"Notification"in window&&Notification.permission==="default"&&
    <div className="notifyPrompt"><button className="x" onClick={()=>setNotifyPrompt(false)}>×</button><b>Stay in the loop</b><span>Get Kivora updates without hunting for them.</span><button className="primary" onClick={notifications}>Enable notifications</button></div>}
 
-  {!user&&<section className="welcome"><div><small>WELCOME TO KIVORA</small><h2>Watch first. Decide later.</h2><p>Start instantly as a guest, or connect Google to keep your Kivora activity across devices.</p></div><div className="welcomeActions"><button className="primary" onClick={guest} disabled={busy}>Start watching</button><button onClick={google} disabled={busy}>Continue with Google</button></div></section>}
+  {!user&&<section className="welcome"><div><small>WELCOME TO KIVORA</small><h2>Watch first. Decide later.</h2><p>Sign in with Google to like videos, comment, and save directly through your YouTube account.</p></div><div className="welcomeActions"><button onClick={google} disabled={busy}>Continue with Google</button></div></section>}
 
+  {showAudioConsent&&<section className="audioConsent" role="dialog" aria-label="Playback preferences"><div><b>Choose your playback experience</b><p>Kivora will try to autoplay Shorts with sound. Your browser may still require a tap before allowing audible autoplay. YouTube likes and comments require YouTube account authorization and may open YouTube when direct API access is unavailable.</p></div><button className="primary" onClick={()=>{localStorage.setItem("kivora-audio-consent","granted");setAudioConsent(true);setShowAudioConsent(false);document.querySelectorAll(".shortCard").forEach(el=>el.dispatchEvent(new CustomEvent("kivora-audio-enabled")))}}>Enable sound & continue</button><button onClick={()=>{localStorage.setItem("kivora-audio-consent","declined");setAudioConsent(false);setShowAudioConsent(false)}}>Not now</button></section>}
   <main>
+   {tab==="search"&&<section className="searchPage panel"><small>DISCOVER ON YOUTUBE</small><h1>Search Shorts</h1><p>Search YouTube Shorts by keyword, creator, topic or song. Choose a result to return to the vertical feed.</p><form onSubmit={e=>{e.preventDefault();go("home");setVideoLoading(true)}} className="searchPageForm"><input id="kivora-search-input" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Try comedy, coding, football…" aria-label="Search YouTube Shorts"/><button className="primary" type="submit">Search</button></form><div className="searchSuggestions">{["Comedy","Technology","Music","Football","Education","Gaming"].map(term=><button key={term} onClick={()=>{setQuery(term);go("home")}}>{term}</button>)}</div><p className="tiny">Results are discovered through the YouTube API. Search requests use your configured server quota.</p></section>}
    {tab==="home"&&<>
     <nav className="categoryNav" aria-label="Shorts categories">{[
       ["all","For You"],["comedy","Comedy"],["tech","Tech"],["adventure","Adventure"],
       ["science","Science"],["finance","Finance"],["education","Education"],["gaming","Gaming"],["sports","Sports"],
       ["food","Food"],["music","Music"],["beauty","Beauty"],["new","New"]
     ].map(([key,label])=><button key={key} className={category===key?"active":""} onClick={()=>{setCategory(key);setQuery("")}}>{label}</button>)}</nav>
-    <section className="discoverTools"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search Shorts…" aria-label="Search Kivora Shorts"/><span>{query?"Search results":"Choose a category to personalize this Shorts feed."}</span></section>
+    <section className="discoverTools"><button className="discoverSearchButton" onClick={()=>go("search")}><span>⌕</span>{query||"Search Shorts, creators, songs…"}<kbd>Search</kbd></button><span>{query?"Search results":"Choose a category to personalize this Shorts feed."}</span></section>
     {videoLoading&&<section className="sourceNote"><b>Finding videos…</b><p>Kivora is loading live YouTube discovery results.</p></section>}
     {videoError&&<section className="sourceNote"><b>Video discovery notice</b><p>{videoError}</p>{query.trim()&&<button onClick={()=>setQuery("")}>Back to Discover</button>}</section>}
     <div className="feed">{(()=>{
@@ -533,15 +533,15 @@ function ShortsPlayer({video,onOpen,onNotice,ad=false,playbackKey="",campaignId=
      if(cancelled||!window.YT?.Player||!box.current||document.getElementById(id)?.dataset.loaded==="1")return;
      const el=document.getElementById(id); if(!el)return;
      el.dataset.loaded="1";
-     player.current=new window.YT.Player(id,{videoId:video.id,width:"100%",height:"100%",playerVars:{autoplay:1,controls:0,rel:0,playsinline:1,enablejsapi:1,iv_load_policy:3,disablekb:1,fs:0,origin:publicOrigin()},events:{
-       onReady:()=>{if(cancelled)return;setReady(true);try{player.current.unMute();if(visibleRef.current){player.current.playVideo();setPlaying(true)}}catch{}},
+     player.current=new window.YT.Player(id,{videoId:video.id,width:"100%",height:"100%",playerVars:{autoplay:1,mute:0,controls:0,rel:0,playsinline:1,enablejsapi:1,iv_load_policy:3,disablekb:1,fs:0,origin:publicOrigin()},events:{
+       onReady:()=>{if(cancelled)return;setReady(true);try{if(audioConsent){player.current.unMute()}if(visibleRef.current){player.current.playVideo();setPlaying(true)}}catch{}},
        onStateChange:e=>{if(window.YT?.PlayerState&&e.data===window.YT.PlayerState.PLAYING){setPlaying(true);armImpression()}if(window.YT?.PlayerState&&[window.YT.PlayerState.PAUSED,window.YT.PlayerState.ENDED].includes(e.data)){setPlaying(false);disarmImpression()}},
-       onAutoplayBlocked:()=>onNotice?.("Automatic playback was blocked by the browser. Keep Kivora open and allow autoplay for the best Shorts experience.")
+       onAutoplayBlocked:()=>onNotice?.("Your browser blocked autoplay with sound. Tap the current video once to allow playback; Kivora will continue auto-playing the next loaded Shorts where permitted.")
      }});
    };
    loadYouTubeApi(start);
    return()=>{cancelled=true;disarmImpression();try{player.current?.destroy()}catch{}player.current=null};
- },[video.id,id,isDrive,campaignId]);
+ },[video.id,id,isDrive,campaignId,audioConsent]);
 
  useEffect(()=>{
    const node=box.current;if(!node)return;
@@ -550,10 +550,10 @@ function ShortsPlayer({video,onOpen,onNotice,ad=false,playbackKey="",campaignId=
      const ratio=Number(entry.intersectionRatio||0);setVisibleRatio(ratio);
      const active=entry.isIntersecting&&ratio>=.72;visibleRef.current=active;
      if(!player.current||!ready){if(active&&isDrive)armImpression();else if(!active)disarmImpression();return;}
-     try{if(active){player.current.unMute();player.current.playVideo();setPlaying(true);armImpression()}else{player.current.pauseVideo();setPlaying(false);disarmImpression()}}catch{}
+     try{if(active){if(audioConsent)player.current.unMute();player.current.playVideo();setPlaying(true);armImpression()}else{player.current.pauseVideo();setPlaying(false);disarmImpression()}}catch{}
    },{threshold:[0,.5,.72,.9],rootMargin:'0px'});
    observer.observe(node);return()=>{observer.disconnect();disarmImpression()};
- },[ready,isDrive]);
+ },[ready,isDrive,audioConsent]);
 
  async function share(){const url=ad&&video.site?video.site:youtubeShortUrl(video.id);try{if(navigator.share)await navigator.share({title:video.title,text:ad?`Sponsored: ${video.title}`:`Watch ${video.title} on YouTube`,url});else{await navigator.clipboard?.writeText(url);onNotice?.("Link copied to clipboard.")}}catch(e){if(e?.name!=="AbortError")onNotice?.("Unable to share this link right now.")}}
  function openYouTubeEngagement(kind){
@@ -562,15 +562,16 @@ function ShortsPlayer({video,onOpen,onNotice,ad=false,playbackKey="",campaignId=
    else window.open(url,"_blank","noopener,noreferrer");
    onNotice?.(`Opening YouTube to ${kind==="like"?"like this Short":kind==="comments"?"view and post comments":"view the original Short"}. YouTube owns these actions and counts.`);
  }
- function toggleSave(){setSaved(v=>!v);onNotice?.(saved?"Removed from saved":"Saved to Kivora")}
+ function toggleSave(){setSaved(v=>!v);onNotice?.(saved?"Removed from this device’s saved list":"Saved to this device. YouTube saves are managed in YouTube.")}
  const embed= isDrive ? `https://drive.google.com/file/d/${encodeURIComponent(driveId)}/preview?autoplay=1` : "";
  return <article className={`shortCard ${ad?"shortAdCard":""}`} ref={box} onDoubleClick={()=>!ad&&toggleLike()}>
    <div className="shortPlayer">
      {isDrive?<iframe className="shortYT shortDriveFrame" src={embed} title={video.title||"Sponsored video"} allow="autoplay; fullscreen" allowFullScreen onLoad={()=>{setReady(true);if(visibleRef.current)armImpression()}}/>:<div id={id} className="shortYT"/>}
+     {!isDrive&&ready&&!playing&&<button className="shortPlaybackFallback" onClick={e=>{e.stopPropagation();try{player.current?.playVideo();player.current?.unMute();setPlaying(true)}catch{onNotice?.("YouTube player is not ready. Check your connection and try again.")}}} aria-label="Play Short">▶ <span>Tap to play</span></button>}
      {ad&&<div className="shortTopline"><span>SPONSORED</span></div>}
      <div className="shortGradient" aria-hidden="true"/>
      <div className="shortRail" onClick={e=>e.stopPropagation()}><button className="shortRailButton" onClick={()=>openYouTubeEngagement("like")} aria-label="Like on YouTube" title="Like on YouTube"><span>♥</span><small>{compactCount(engagement.youtubeLikeCount)}</small></button><button className="shortRailButton" onClick={()=>openYouTubeEngagement("comments")} aria-label="YouTube comments" title="View YouTube comments"><span>▤</span><small>{compactCount(engagement.commentCount)}</small></button>{!ad&&<button className={`shortRailButton ${saved?"active":""}`} onClick={toggleSave} aria-label={saved?"Unsave":"Save"} title="Save to Kivora"><span>＋</span><small>{saved?"Saved":"Save"}</small></button>}<button className="shortRailButton" onClick={share} aria-label="Share" title="Share"><span>↗</span><small>Share</small></button></div>
-     <div className="shortBottomInfo" onClick={e=>e.stopPropagation()}><div className="shortCreator"><span className="shortAvatar">{(video.channelTitle||"Y").slice(0,1).toUpperCase()}</span><b>{video.channelTitle||"YouTube"}</b></div><h2>{video.title}</h2><p>{formatDuration(video.durationSeconds)}{video.desc?` · ${video.desc.slice(0,120)}${video.desc.length>120?"…":""}`:""}</p><div className="shortEngagement" aria-label="YouTube engagement statistics"><span>▶ {compactCount(engagement.viewCount)} views</span><span>♥ {compactCount(engagement.youtubeLikeCount)} likes</span><span>▤ {compactCount(engagement.commentCount)} comments</span><small>Live from YouTube API · cached</small></div>}{ad&&<div className="shortAdMeta"><span>Sponsored video · Kivora ad</span>{isDrive?<small>Hosted by Google Drive · Kivora does not store the file</small>:<small>YouTube playback · YouTube may independently serve ads inside its player</small>}</div>}</div>
+     <div className="shortBottomInfo" onClick={e=>e.stopPropagation()}><div className="shortCreator"><span className="shortAvatar">{(video.channelTitle||"Y").slice(0,1).toUpperCase()}</span><b>{video.channelTitle||"YouTube"}</b></div><h2>{video.title}</h2><p>{formatDuration(video.durationSeconds)}{video.desc?` · ${video.desc.slice(0,88)}${video.desc.length>88?"…":""}`:""}</p><div className="shortEngagement" aria-label="YouTube engagement statistics"><span>▶ {compactCount(engagement.viewCount)} views</span><span>♥ {compactCount(engagement.youtubeLikeCount)} likes</span><span>▤ {compactCount(engagement.commentCount)} comments</span><small>Live from YouTube API · cached</small></div>}{ad&&<div className="shortAdMeta"><span>Sponsored video · Kivora ad</span>{isDrive?<small>Hosted by Google Drive · Kivora does not store the file</small>:<small>YouTube playback · YouTube may independently serve ads inside its player</small>}</div>}</div>
    </div>
    {ad&&(video.promotionType==="app"&&video.site||video.promotionType!=="app")&&<a className="shortDestinationBanner" href={video.promotionType==="app"?video.site:youtubeShortUrl(video.id)} target="_blank" rel="noopener noreferrer" onClick={()=>{try{navigator.sendBeacon?.(apiUrl('/api/ad-click'),new Blob([JSON.stringify({campaignId,placement:video.promotionType==="app"?"shorts-site-banner":"shorts-youtube-banner"})],{type:'application/json'}))}catch{}}}><span className="destinationIcon"><img src={video.promotionType==="app"?(video.siteIcon||`https://www.google.com/s2/favicons?domain=${encodeURIComponent(video.site)}&sz=128`):"https://www.youtube.com/s/desktop/ee47a3d6/img/favicon_144x144.png"} alt="" onError={e=>{e.currentTarget.style.display="none"}}/></span><span className="destinationCopy"><b>{video.promotionType==="app"?(video.destinationName||video.channelTitle||"Visit advertiser"):(video.channelTitle||"Watch on YouTube")}</b><small>{video.promotionType==="app"?video.site.replace(/^https?:\/\//i,"").replace(/\/$/,""):`youtube.com/shorts/${video.id}`}</small></span><strong>{video.promotionType==="app"?"Visit ↗":"Watch ↗"}</strong></a>}
  </article>
