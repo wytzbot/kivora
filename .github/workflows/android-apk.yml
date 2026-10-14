@@ -1,0 +1,128 @@
+name: Build Kivora APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.js'
+      - 'capacitor.config.json'
+      - 'scripts/prepare-android.mjs'
+      - '.github/workflows/android-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Deliberately do not enable setup-node's npm cache here.
+      # GitHub Actions requires a committed lockfile for cache: npm, and this
+      # project intentionally does not require one to build.
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          check-latest: false
+
+      - name: Install web dependencies
+        run: npm install --include=dev --no-audit --no-fund
+
+      - name: Verify Capacitor toolchain
+        run: |
+          node --version
+          npm --version
+          npx tsc --version
+          npx cap --version
+
+      - name: Build Kivora web app
+        env:
+          # Defaults to the production site; override with the VITE_API_BASE_URL secret if it moves.
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL || 'https://kivora-ecru.vercel.app' }}
+          VITE_PUBLIC_URL: ${{ secrets.VITE_PUBLIC_URL || 'https://kivora-ecru.vercel.app' }}
+          VITE_FLUTTERWAVE_PUBLIC_KEY: ${{ secrets.VITE_FLUTTERWAVE_PUBLIC_KEY }}
+        run: npm run build
+
+      - name: Add Android platform
+        run: |
+          # capacitor.config.json is the canonical config for this project.
+          # Remove stale generated TS/JS configs if a previous artifact ever leaks into the workspace.
+          rm -f capacitor.config.ts capacitor.config.js
+          test -f capacitor.config.json
+          npx cap add android
+
+      # Needed for native Google sign-in. Create the Android app in the Firebase
+      # console, download google-services.json and store it as this secret.
+      - name: Add google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            echo "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
+          else
+            echo "::warning::GOOGLE_SERVICES_JSON secret missing. Google sign-in will not work in the APK."
+          fi
+
+      - name: Sync web app into Android project
+        run: npx cap sync android
+
+      - name: Apply Android hardening
+        run: node scripts/prepare-android.mjs
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 36
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      # An unsigned release APK cannot be installed on a phone. Build a signed release
+      # when keystore secrets exist, otherwise fall back to an installable debug APK.
+      - name: Build APK
+        working-directory: android
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          mkdir -p ../out
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            ./gradlew assembleRelease --no-daemon --stacktrace
+            echo "$KEYSTORE_BASE64" | base64 -d > ../release.keystore
+            BT="$ANDROID_HOME/build-tools/36.0.0"
+            "$BT/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk ../out/kivora-aligned.apk
+            "$BT/apksigner" sign --ks ../release.keystore --ks-pass env:KEYSTORE_PASSWORD \
+              --ks-key-alias "$KEY_ALIAS" --key-pass env:KEY_PASSWORD \
+              --out ../out/kivora-release.apk ../out/kivora-aligned.apk
+            rm -f ../out/kivora-aligned.apk ../release.keystore
+          else
+            echo "::warning::No signing keystore secrets; building a debug-signed APK."
+            ./gradlew assembleDebug --no-daemon --stacktrace
+            cp app/build/outputs/apk/debug/app-debug.apk ../out/kivora-debug.apk
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kivora-apk
+          path: out/*.apk
+          if-no-files-found: error

@@ -1,0 +1,249 @@
+# Kivora
+
+Kivora is a mobile-first, Shorts-first independent entertainment discovery web app. It is intentionally **not a YouTube clone**.
+
+## Current safeguards and flows
+
+- Google account selection is the first screen; a successful Google login opens the Shorts feed directly.
+- Videos use the official YouTube IFrame Player API; Kivora does not download or proxy video streams.
+- The feed is vertical/square-first and preserves the source video's playback duration rather than truncating playback in Kivora.
+- Category results are cached in the current session so previously opened categories switch instantly; additional pages load as viewers scroll.
+- Search supports YouTube keyword queries for titles, creators, and channels.
+- Feed controls are limited to previous/next navigation and the essentials menu. The notification UI and push-notification implementation have been removed.
+- Kivora's existing sponsored-video campaign and impression-tracking flow remains separate from organic YouTube videos. No Adsterra integration is used.
+
+## Chinese and Bollywood discovery
+
+Kivora uses originality ratings as a recommendation signal rather than a hard trusted-channel ban. Unreviewed creators are not banned. Videos can remain searchable while low-confidence or low-originality signals reduce recommendation exposure. Spam-pattern filtering still protects recommendation surfaces.
+
+Do not describe a creator as "official" or "authorized" merely because a search result exists. Kivora should only make that designation after a separate rights/creator review.
+
+## Pro translated captions
+
+Translated captions are a **Kivora Pro** feature. The UI keeps the caption/translation control visible but locked for Free users. Pro users can select supported language codes and Kivora requests the selected caption track through the official YouTube IFrame Player API. YouTube supports `cc_load_policy`, `cc_lang_pref`, and caption-track controls in embedded players. citeturn0search1turn0search2
+
+Important limitation: the official embedded player does not expose arbitrary third-party YouTube caption text to Kivora for client-side retranslating. Therefore Kivora should not pretend that it is extracting YouTube captions and sending them to Google Cloud Translation. The current implementation uses the source player's available translated caption tracks. If Google Cloud Translation is added later, it must be done server-side with an authorized caption-text source and the required Google attribution/markup rules. Google requires clear attribution when its Cloud Translation output is displayed directly to users. citeturn0search0turn0search5
+
+The Pro entitlement is checked from a server-issued Firebase Auth custom claim (`pro=true` or `plan=pro`). The frontend must not use a localStorage or client-only "premium" flag as proof of payment.
+
+## Advertising implementation notes
+
+- Sponsored video campaigns accept YouTube Shorts/video URLs only. The source must already be published on YouTube and pass server-side format and embedding checks.
+- Sponsored app/site campaigns require an HTTPS destination URL and name. Short-only campaigns use a YouTube destination.
+- Billing is $1 (about ₦1,300) per campaign targeting approximately 3,000–4,500 qualified impressions. A qualified exposure requires at least 2 seconds and at least 50% visibility.
+- Impression counters and campaign payment state are server-authoritative. Firestore client writes to `campaigns` and `impressionEvents` are disabled; server endpoints use Firebase Admin.
+- Configure `FIREBASE_SERVICE_ACCOUNT_JSON` and `FLW_SECRET_KEY` as Vercel server environment variables. Never put either secret in `VITE_*` variables.
+- Advertiser checkout uses Flutterwave's hosted checkout endpoint server-side, then verifies the transaction before changing a campaign to `ready`.
+
+## Advertising: video-only campaigns, links and expense monitoring
+
+Kivora uses a **video-only Shorts advertising model**. Banner/image placements are not supported. Advertisers can choose between two promotion types:
+
+- **Promote my Short:** the sponsored Short does not require a destination link.
+- **Promote an app or site:** a valid HTTPS destination URL and destination name are required. The destination is rendered as a compact banner directly beneath the sponsored video, with an app/site icon (custom icon when supplied; otherwise a favicon fallback), name, domain and an Open action.
+
+Before payment, Kivora performs a preflight check for:
+
+- supported video asset;
+- promotion type and required destination fields;
+- prohibited political/adult terms;
+- positive target impression count (minimum 3,000);
+- campaign duration (1–90 days);
+- start date and campaign pacing values;
+- required brand/title information.
+
+### Pricing
+
+The video rate is **$1.00 (about ₦1,300) per campaign targeting approximately 3,000–4,500 qualified impressions**. Targets are rounded up to whole 4,500-impression billing blocks, with a 3,000-impression minimum target. Actual delivery may vary within the estimated 3,000–4,500 impressions per $1 campaign range. The server recalculates the amount before payment; the browser is only a preview.
+
+A qualified impression requires at least **2 seconds of viewability at 50%+ visibility** and is intended to be counted once for the qualifying delivery event. Raw iframe loads, hidden players and ordinary page loads are not billable.
+
+### Campaign days and expense monitoring
+
+Each campaign has a start date and duration. Kivora calculates:
+
+- campaign end date;
+- total impression target and rounded billable target;
+- total campaign budget;
+- planned daily impression target;
+- planned daily budget;
+- delivered qualified impressions;
+- delivered spend;
+- remaining impressions and remaining budget;
+- elapsed days and expected impressions to date;
+- pacing state (on track, ahead or behind).
+
+`functions/ad-engine.js` contains the server-authoritative helpers for pricing, qualified-impression validation, activation, delivered spend and campaign pacing. `updateAdMonitor()` keeps delivery counters separate from viewer engagement and caps billable impressions at the campaign target.
+
+The browser must never be the source of truth for billing, spend, impressions, clicks or campaign activation.
+
+A server-side campaign record should retain the promotion type, destination fields, start date, duration, target impressions, verified payment state, moderation state and monitor state.
+
+## Sponsored asset policy\n\nSponsored video assets must be hosted on YouTube before campaign submission. Kivora stores the video ID and campaign metadata, never the video file. The official YouTube embed handles playback and source attribution.\n\n## Creator/source policy
+
+Kivora should store YouTube video IDs and permitted metadata, not audiovisual files. The official YouTube embedded player supplies the stream. Do not download, proxy, strip attribution from or re-host YouTube videos.
+
+Kivora's creator policy explains this distinction so creators can see that Kivora is a discovery/embed product rather than claiming ownership of third-party videos.
+
+## Pro and payments
+
+The production flow should be:
+
+1. create a checkout session on the server;
+2. calculate the bill server-side;
+3. send the user to Flutterwave;
+4. verify the transaction server-side;
+5. validate amount, currency and reference;
+6. process signed webhooks idempotently;
+7. grant a server-side Pro entitlement or activate the campaign;
+8. expose the verified state to the client.
+
+Never put a Flutterwave secret key in the frontend and never treat a client-side success screen as proof of payment.
+
+## Anti-clash / reliability rules
+
+- Disable duplicate submits while an async operation is running.
+- Keep the Shorts feed viewport-stable with scroll snapping and a vertical/square player area; do not route feed taps into a separate description/watch page.
+- Limit discovery to one YouTube `search.list` call per feed request (100 quota units) plus one batched `videos.list` lookup for statistics/format verification; use shared cache headers and avoid per-card statistics calls except for sponsored items, whose endpoint is also cache-controlled.
+- Never charge from a client-side calculated amount.
+- - Never publish an arbitrary YouTube search result directly to the feed.
+- Do not mix Kivora likes/saves with YouTube likes/views.
+- Validate Drive/YouTube assets before campaign activation.
+- Keep ad monitoring and billing state separate from viewer engagement state.
+- Treat missing/invalid third-party media as a recoverable campaign/video state rather than allowing a player or ad component to crash the app.
+
+## Build
+
+```bash
+npm install
+npm run build
+```
+
+The project is React + Vite and can be deployed to Vercel or another static/Node-compatible host, with Firebase used for authentication/data.
+
+## Originality rating security
+
+- Ratings are 1–5 and represent perceived originality only.
+- One rating is allowed per authenticated Google account per video.
+- The rating is stored under `videos/{videoId}/ratings/{uid}` and the aggregate is updated in the same Firestore transaction.
+- Firestore rules reject direct aggregate manipulation and reject standalone rating-document creation.
+- Clearing local storage does not allow a second rating because the server-side rating document remains authoritative.
+- A video is not deleted because of a low rating. Once enough ratings exist, low originality reduces recommendation exposure through `canRecommend()`.
+- The recommendation threshold uses a neutral prior so a single early rating does not immediately bury a new video. The current demo feed also applies the same policy client-side; a production deployment should call a Vercel/API route backed by Firebase Admin for the final FYP/search ranking rather than trusting a browser-calculated ranking.
+
+
+## Kivora owner billing bypass
+
+The authenticated account `ilemobayotolulope11092003@gmail.com` is hard-coded as the Kivora owner account. When the authenticated Firebase email matches this address, Kivora Pro and advertising billing are treated as free.
+
+This does **not** bypass campaign validation, asset checks, moderation, impression monitoring, or Firestore security. The server must derive the email from the authenticated Firebase identity and must never trust an email supplied by the browser. Flutterwave is skipped for this account because no payment is due.
+
+The owner email is intentionally present in the application source because this is an explicit owner-only development/business entitlement. If the project becomes open-source, move the entitlement to a server-side custom claim or private server configuration before publishing the repository.
+
+
+## Deep-check status
+
+An earlier maintenance pass fixed several flow-level issues: originality ratings are checked against the authenticated Google account instead of localStorage; discovery scoring accepts both object and numeric inputs consistently; the owner billing bypass is accepted by the activation helper; and navigation uses standard scroll behavior.
+
+A follow-up line-by-line pass found and fixed:
+
+- **Autoplay race condition:** a video already in view when the page loaded could fail to autoplay, because the IntersectionObserver could fire before the YouTube player finished initializing, and nothing re-checked visibility once the player became ready. The visibility state and the "player ready" state are now tracked independently and re-applied whenever either one changes, so a card that's already on screen plays as soon as its player is ready instead of only after the user scrolls it out and back in.
+- **Search hid legitimate results:** the search box reused the home-feed recommendation filter, which also hides videos below the low-confidence originality threshold. That meant a video could be un-findable by exact title search even though the design intent (see "Chinese and Bollywood discovery" above) is that only spam should be excluded from search, while originality only affects default/FYP ranking. Search now filters spam only; the originality threshold is applied solely to the default (no-query) feed.
+- **`.env.example` was malformed:** the file contained literal `\n` escape sequences instead of real line breaks, so it rendered as one broken line instead of separate comments/variables.
+- **App icons:** `icon-192.png` and `icon-512.png` are wired up via `<link rel="icon">` and `<link rel="apple-touch-icon">` in `index.html`; swap these for final branded artwork before launch.
+- **Unmounted-component update on Premium checkout:** the demo checkout's `setTimeout` could fire after a user navigated away from the Pro screen. It now checks the component is still mounted before updating state.
+
+The project was statically checked with Node's JavaScript parser for all `.js` modules, plus a manual line-by-line read of every file and a bracket/paren balance check on the JSX. A complete Vite build could not be executed in this environment because npm registry access is blocked here; run `npm install && npm run build` in your own environment before release to catch anything a static read can't (e.g. actual JSX transform errors).
+
+## Live YouTube discovery setup
+
+Kivora now loads live video discovery through the Vercel serverless endpoint `GET /api/youtube-search`, which calls YouTube Data API v3. The browser then plays returned video IDs with the official YouTube IFrame Player API. YouTube's `search.list` supports `type=video` and returns the video ID plus snippet metadata; the embedded player handles playback.
+
+### Required environment variable
+
+Set this on the deployment platform (for example Vercel), not in `src/` and not in a `VITE_` variable:
+
+`YOUTUBE_API_KEY=...`
+
+The API key must have **YouTube Data API v3** enabled. Because the request is made by the serverless function, do not use an HTTP-referrer restriction intended for a browser key. Keep the key restricted to **YouTube Data API v3**; do not expose it in the client bundle. If you use a Vercel serverless backend without a fixed outbound IP, IP-address restriction is generally not practical.
+
+The IFrame Player API does **not** require a separate API key.
+
+The endpoint filters discovery to embeddable/syndicated videos and returns normalized metadata for Kivora. Search requests from the Kivora search box are debounced and sent to the same endpoint.
+
+## Kivora UI refresh
+
+- No promotional hero block on the FYP; the feed starts with a compact discovery header.
+- Larger typography, pill-shaped controls, card-based movie-app styling, light/dark/system themes.
+- Collapsible menu sections for personalization, FAQs, legal pages and YouTube.
+- Legal information is collapsed below the FYP.
+- Videos expose secondary metadata inside an expandable “About this video” section.
+- Native-style actions include installable PWA support where the browser exposes the install prompt, device share, fullscreen playback and direct “Watch on YouTube” links.
+- Approved sponsored campaigns can appear in the FYP with a visible Sponsored label.
+- Advertising is video-only at $1.00 (about ₦1,300) per campaign targeting approximately 3,000–4,500 qualified impressions. App/site campaigns can optionally display a destination banner beneath the sponsored video.
+
+
+## Action-movie discovery update
+Kivora's FYP is action-movie focused across multiple industries: Suggested, All, New, Hollywood, Bollywood, Chinese, Korean, Japanese, Nollywood, South Indian, Thai, and Indonesian. Discovery queries are action-oriented and the server/client filters exclude recap, explained, summary, review, reaction, trailer/teaser, Shorts, fan-edit and similar non-movie results. YouTube remains the playback source through the official embedded player.
+
+## FYP filtering and presentation update
+
+Kivora now uses a thumbnail-first movie-feed presentation: the FYP shows the source thumbnail, duration, title, channel, views/date and compact actions. A viewer taps the thumbnail to open the official YouTube player.
+
+Discovery is stricter for the action-movie feed. YouTube search requests use the long-duration filter and Kivora applies a 40-minute minimum, action/movie signals, and exclusion rules for recaps, explained videos, reviews, reactions, trailers, Shorts, clips, vlogs, music and other non-movie formats. General All/Suggested/New discovery also excludes common Indian-industry terms so those results are primarily reached through their dedicated categories; Bollywood, South Indian and other industry tabs remain available.
+
+Subtitles can be toggled on/off after playback starts. Pro users can choose a subtitle language when the source video exposes captions. This uses the official YouTube player; caption/language availability is controlled by the source video and YouTube.
+
+## YouTube-style watch page
+
+Tapping a FYP video opens a dedicated watch page with the official YouTube player, compact actions, related action movies and clearly labelled sponsored placements between related videos. Comments remain on YouTube.
+### Latest watch-page refinements
+- The ↔ player action is the Kivora landscape/fullscreen action.
+- Like, Save and Share are compact icon actions and remain visible; they no longer auto-hide.
+- The direct “Open on YouTube” action was removed from Kivora UI.
+- Device Back uses browser history so leaving a watch page returns to the previous Kivora page instead of treating the watch page as a terminal screen.
+- Advertising prices show USD plus a Naira display equivalent. The current UI reference is ₦1,330 per $1, so $1.99 ≈ ₦2,647 and $2.99 ≈ ₦3,977. The exchange rate is configurable server-side with `KIVORA_USD_NGN_RATE`.
+- YouTube's embedded player still controls its own native progress-bar color; the official API currently supports only `red` or `white`, so Kivora does not overlay the iframe to fake a brand-colored YouTube control.
+
+## Subtitle / translation behavior
+
+Kivora does **not** need the Google Cloud Translation API just to show YouTube's own captions or ask the embedded YouTube player for a preferred caption language. Kivora uses YouTube's supported `cc_load_policy` and `cc_lang_pref` player parameters. If YouTube has an original or translated caption track for the selected video, the player can display it; if not, Kivora cannot manufacture a subtitle track for that third-party video.
+
+Google Cloud Translation API is only needed if Kivora itself wants to translate arbitrary text/transcripts. That requires a separate translation service and billing/quota setup. It does **not** automatically inject translated subtitles into arbitrary YouTube embeds. YouTube's Data API caption download/translation endpoints require authorization tied to videos the authenticated user has permission to edit, so Kivora should not use them to pull captions from unrelated creators' videos.
+
+## Infinite FYP pagination
+The Kivora FYP now uses YouTube's `nextPageToken` pagination. The initial discovery page loads normally, then an intersection observer requests the next page automatically as the viewer approaches the bottom of the feed. Each discovery query keeps its own YouTube page token so pagination remains valid for multi-query categories. Results are de-duplicated before being appended. The feed continues until YouTube has no further page token or the API/quota prevents additional discovery.
+
+This is an effectively endless feed from the user's perspective, not an unlimited YouTube API entitlement. YouTube Data API quota still applies, and Kivora should keep server-side caching/rate limits enabled in production.
+
+## Google sign-in recovery
+Google authentication now signs directly into the selected Google account instead of attempting to link the account picker result to Kivora's anonymous watch-first session. This avoids `auth/credential-already-in-use` when the Gmail address already has a Kivora account. Existing redirect flows also recover by authenticating the existing Google account.
+
+
+## Shorts-only feed and video advertising
+
+Kivora no longer renders banner or rectangle ads. The feed accepts only eligible short-form videos up to 180 seconds, and sponsored delivery is video-only. A video ad impression is intended to become billable only after at least 2 seconds of playback while at least 50% of the ad player is visible; repeated raw loads are not treated as qualified delivery. The server-side ad engine uses $1.00 (about ₦1,300) per campaign targeting approximately 3,000–4,500 qualified impressions, caps delivered billing at the campaign target, and rejects non-video campaign formats.
+
+
+## Playback separation
+- Organic feed items use the official YouTube embedded player and are never sent to `/api/ad-impression`.
+- Sponsored feed items are marked `SPONSORED`, carry the campaign ID, and alone can create billable Kivora impression events.
+- Google Drive sponsored assets are embedded from Drive and are not downloaded or stored by Kivora.
+- YouTube-hosted sponsored assets still use YouTube's official player. YouTube controls any YouTube-native advertising inside that player; Kivora's sponsored campaign accounting is separate.
+- Kivora cannot programmatically suppress YouTube-native ads in an embedded YouTube player.
+
+
+## Shorts eligibility enforcement
+
+Organic YouTube videos are accepted only when the YouTube Data API reports a square or vertical player, duration of 180 seconds or less, and a publication date on/after October 15, 2024. This follows YouTube’s current standard-channel Shorts classification rule. Sponsored YouTube assets use the same server-side validation. Google Drive sponsored assets remain supported as externally hosted short-form videos and are not stored by Kivora.
+
+
+### Shorts eligibility and impression delivery
+
+YouTube Shorts eligibility is checked server-side using the YouTube Data API. The API requests bounded embed dimensions (1080x1920), then Kivora requires a square/vertical aspect ratio, duration <= 180 seconds, publication date on/after 2024-10-15, and embeddability where applicable. The API's `player.embedWidth`/`embedHeight` fields are only returned when maxWidth/maxHeight are supplied.
+
+Ad impressions are viewer events, not advertiser events. The delivery endpoint accepts signed-in viewers and anonymous viewers; an advertiser viewing their own campaign is not billable. Impression events remain server-side and duplicate exposure keys are rejected.
+
+
+## Shared Flutterwave webhook
+Kivora campaign checkout references start with `KIVORA-` and are handled by the existing WyDev Flutterwave webhook endpoint. The webhook verifies the transaction with Flutterwave, checks reference/amount/currency, then marks the matching Kivora campaign paid and ready. Kivora does not need a second Flutterwave webhook URL.

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+android/
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+google-services.json
+.vercel/

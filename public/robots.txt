@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin/
+
+# Kivora's public watch pages use ?watch=VIDEO_ID URLs.
+# Submit https://YOUR-DOMAIN/sitemap.xml in Google Search Console after deployment.
