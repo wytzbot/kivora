@@ -17,3 +17,8 @@ Caused by the OAuth consent screen, not the code. In Google Cloud Console -> API
 - **Ads Studio notes** (step cards, notice boxes) use black text on the light cards, readable in dark mode.
 - **Menus** (main menu, categories, quick menu) are height-limited to the screen and scroll instead of truncating.
 - **Faster video start**: YouTube player script is loaded at app start and preconnected; each Short shows its thumbnail instantly and fades it out when playback begins; off-screen pre-created players no longer autoplay (saves bandwidth); thumbnails are cached by the service worker (cache v3).
+
+## Update 3
+- Categories dropdown now anchors to the header: full-width on phones, 2-column grid, scrolls (max ~52% screen height), no more off-screen clipping. Main menu anchored the same way.
+- Videos now fill the whole screen page (player scaled to cover, removing YouTube's black letterbox bars on phones); one screen = one video + its info.
+- TikTok-style thin light lines mark the top and bottom edge of every video screen.
