@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7a63ff"/><stop offset=".55" stop-color="#4a2fe0"/><stop offset="1" stop-color="#d63f93"/></linearGradient>
+<linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".28"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient>
+<linearGradient id="k" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#e9e4ff"/></linearGradient>
+</defs>
+<rect width="512" height="512" fill="url(#bg)"/>
+<rect width="512" height="512" fill="url(#sheen)"/>
+<g transform="translate(0,6)">
+<rect x="148" y="132" width="64" height="248" rx="32" fill="url(#k)"/>
+<path d="M366 142 L236 256 L366 370" fill="none" stroke="url(#k)" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M300 222 L352 256 L300 290 Z" fill="#4a2fe0" opacity=".0"/>
+</g>
+<circle cx="392" cy="120" r="22" fill="#ffd36e"/>
+<path d="M386 110 l18 10 -18 10z" fill="#4a2fe0"/>
+</svg>

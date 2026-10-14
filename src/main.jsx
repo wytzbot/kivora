@@ -331,12 +331,12 @@ function App(){
  }
  return <div className="app">
   <header className="topbar">
-   <button className="brand" onClick={()=>go("home")}><span className="brandGlyph">K</span><span>Kivora</span></button>
+   <button className="brand" onClick={()=>go("home")}><span className="brandGlyph"><BrandMark/></span><span>Kivora</span></button>
    <div className="topActions">
-    <div className="categoryDropdown"><button className={`categoryTrigger ${categoryMenuOpen?"active":""}`} onClick={()=>setCategoryMenuOpen(v=>!v)} aria-expanded={categoryMenuOpen}><span className="categoryTriggerIcon">▦</span><span>CATEGORIES</span><span className="categoryCurrent">{categories.find(c=>c[0]===category)?.[1]||"For You"}</span><span>⌄</span></button>{categoryMenuOpen&&<div className="categoryMenu" role="listbox" aria-label="Choose a video category">{categories.map(([key,label])=><button key={key} role="option" aria-selected={category===key} className={category===key?"selected":""} onClick={()=>{setCategory(key);setQuery("");setShuffleOrder([]);setSearchOpen(false);setCategoryMenuOpen(false);go("home",{history:false});requestAnimationFrame(()=>document.querySelector(".feed")?.scrollTo({top:0,behavior:"auto"}))}}>{label}{category===key&&<span>✓</span>}</button>)}</div>}</div>
-    <button className="headerIconButton" onClick={()=>{setSearchOpen(v=>!v);setCategoryMenuOpen(false);if(!searchOpen)setTimeout(()=>document.getElementById("kivora-inline-search")?.focus(),60);else setQuery("")}} aria-label={searchOpen?"Close search":"Search videos"} title="Search">{searchOpen?"×":"⌕"}</button>
-    <button className="headerIconButton refreshButton" onClick={refreshFeed} aria-label="Shuffle and refresh videos" title="Shuffle videos">⟳</button>
-    <button className="menuBtn" aria-label="Open menu" onClick={()=>setMenu(!menu)}>⋮</button>
+    <div className="categoryDropdown"><button className={`categoryTrigger ${categoryMenuOpen?"active":""}`} onClick={()=>setCategoryMenuOpen(v=>!v)} aria-expanded={categoryMenuOpen}><span className="categoryTriggerIcon"><Icon name="grid"/></span><span>CATEGORIES</span><span className="categoryCurrent">{categories.find(c=>c[0]===category)?.[1]||"For You"}</span><span className="categoryChevron"><Icon name="chevronDown" size={16}/></span></button>{categoryMenuOpen&&<div className="categoryMenu" role="listbox" aria-label="Choose a video category">{categories.map(([key,label])=><button key={key} role="option" aria-selected={category===key} className={category===key?"selected":""} onClick={()=>{setCategory(key);setQuery("");setShuffleOrder([]);setSearchOpen(false);setCategoryMenuOpen(false);go("home",{history:false});requestAnimationFrame(()=>document.querySelector(".feed")?.scrollTo({top:0,behavior:"auto"}))}}>{label}{category===key&&<span>✓</span>}</button>)}</div>}</div>
+    <button className="headerIconButton" onClick={()=>{setSearchOpen(v=>!v);setCategoryMenuOpen(false);if(!searchOpen)setTimeout(()=>document.getElementById("kivora-inline-search")?.focus(),60);else setQuery("")}} aria-label={searchOpen?"Close search":"Search videos"} title="Search">{searchOpen?<Icon name="close"/>:<Icon name="search"/>}</button>
+    <button className="headerIconButton refreshButton" onClick={refreshFeed} aria-label="Shuffle and refresh videos" title="Shuffle videos"><Icon name="refresh"/></button>
+    <button className="menuBtn" aria-label="Open menu" onClick={()=>setMenu(!menu)}><Icon name="more"/></button>
     <button className="avatar accountAvatar" onClick={()=>go("account")} aria-label={`Account: ${user.email||"Google account"}`} title={user.email||"Google account"}>{user.photoURL?<img src={user.photoURL} alt=""/>:<span>{(user.email||"K").trim().slice(0,1).toUpperCase()}</span>}</button>
    </div>
    {searchOpen&&<form className="inlineSearchBar" onSubmit={e=>{e.preventDefault();go("home",{history:false});setSearchOpen(false)}}><span>⌕</span><input id="kivora-inline-search" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search videos, titles, creators, channels…" aria-label="Search YouTube Shorts"/><button type="submit">Search</button><button type="button" className="searchCancel" onClick={()=>{setQuery("");setSearchOpen(false)}}>Cancel</button></form>}
@@ -433,7 +433,7 @@ function YouTubePlayer({video,isPro,onNotice,compact=false}){
     playerVars:{autoplay:1,controls:1,rel:0,playsinline:1,enablejsapi:1,color:"white",cc_load_policy:captions?1:0,cc_lang_pref:captionLang,origin:publicOrigin()},
     events:{
       onReady:()=>{if(captions){try{player.current.loadModule("captions");player.current.setOption("captions","track",{language:captionLang});}catch{}}},
-      onAutoplayBlocked:()=>onNotice("YouTube blocked automatic playback. Tap the player to start it.")
+      onAutoplayBlocked:()=>{}
     }
    });
   };
@@ -529,9 +529,22 @@ function extractDriveId(value=""){
  return m?.[1]||"";
 }
 
+const ICON_PATHS={
+  grid:<><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></>,
+  chevronDown:<path d="M6 9.5l6 6 6-6"/>,
+  search:<><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></>,
+  close:<path d="M6 6l12 12M18 6L6 18"/>,
+  refresh:<><path d="M20 11a8 8 0 0 0-14.3-4.6L4 8.5"/><path d="M4 4v4.5h4.5"/><path d="M4 13a8 8 0 0 0 14.3 4.6L20 15.5"/><path d="M20 20v-4.5h-4.5"/></>,
+  more:<><circle cx="12" cy="5.5" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="18.5" r="1.4" fill="currentColor"/></>,
+  arrowUp:<path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/>,
+  arrowDown:<path d="M12 5v14M5.5 12.5L12 19l6.5-6.5"/>,
+  play:<path d="M8 5.2v13.6a.6.6 0 0 0 .9.5l11-6.8a.6.6 0 0 0 0-1L8.9 4.7a.6.6 0 0 0-.9.5z" fill="currentColor" stroke="none"/>
+};
+function Icon({name,size=22}){return <svg className="kIcon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{ICON_PATHS[name]}</svg>}
+function BrandMark(){return <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><path d="M9 6v20" stroke="#fff" strokeWidth="4.2" strokeLinecap="round"/><path d="M24 7.5L13.5 16l10.5 8.5" stroke="#fff" strokeWidth="4.2" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>}
 function ShortsPlayer({video,user,onOpen,onNotice,onNavigate,ad=false,playbackKey="",campaignId="",audioConsent=false}){
  const box=useRef(null),player=useRef(null),visibleRef=useRef(false),countedRef=useRef(false),impressionTimer=useRef(null),exposureKey=useRef(crypto.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`);
- const [ready,setReady]=useState(false),[playing,setPlaying]=useState(false),[visibleRatio,setVisibleRatio]=useState(0),[youtubeStats,setYoutubeStats]=useState(null);
+ const [ready,setReady]=useState(false),[playing,setPlaying]=useState(false),[started,setStarted]=useState(false),[visibleRatio,setVisibleRatio]=useState(0),[youtubeStats,setYoutubeStats]=useState(null);
  const [quickMenuOpen,setQuickMenuOpen]=useState(false),[descriptionOpen,setDescriptionOpen]=useState(false);
  useEffect(()=>{
    if(!ad||video.source==="drive"||!video.id)return;
@@ -572,10 +585,10 @@ function ShortsPlayer({video,user,onOpen,onNotice,onNavigate,ad=false,playbackKe
      if(cancelled||!window.YT?.Player||!box.current||document.getElementById(id)?.dataset.loaded==="1")return;
      const el=document.getElementById(id); if(!el)return;
      el.dataset.loaded="1";
-     player.current=new window.YT.Player(id,{videoId:video.id,width:"100%",height:"100%",playerVars:{autoplay:1,mute:0,controls:0,rel:0,playsinline:1,enablejsapi:1,iv_load_policy:3,disablekb:1,fs:0,origin:publicOrigin()},events:{
+     player.current=new window.YT.Player(id,{videoId:video.id,width:"100%",height:"100%",playerVars:{autoplay:visibleRef.current?1:0,mute:0,controls:0,rel:0,playsinline:1,enablejsapi:1,iv_load_policy:3,disablekb:1,fs:0,origin:publicOrigin()},events:{
        onReady:()=>{if(cancelled)return;setReady(true);try{if(audioConsent){player.current.unMute()}if(visibleRef.current){player.current.playVideo();setPlaying(true)}}catch{}},
-       onStateChange:e=>{if(window.YT?.PlayerState&&e.data===window.YT.PlayerState.PLAYING){setPlaying(true);armImpression()}if(window.YT?.PlayerState&&[window.YT.PlayerState.PAUSED,window.YT.PlayerState.ENDED].includes(e.data)){setPlaying(false);disarmImpression()}},
-       onAutoplayBlocked:()=>onNotice?.("Your browser blocked audible autoplay. Allow sound in playback settings or tap once; the next Shorts will continue automatically where the browser permits."),
+       onStateChange:e=>{if(window.YT?.PlayerState&&e.data===window.YT.PlayerState.PLAYING){setPlaying(true);setStarted(true);armImpression()}if(window.YT?.PlayerState&&[window.YT.PlayerState.PAUSED,window.YT.PlayerState.ENDED].includes(e.data)){setPlaying(false);disarmImpression()}},
+       onAutoplayBlocked:()=>{},
        onError:e=>{setPlaying(false);onNotice?.(e?.data===101||e?.data===150?"This creator has disabled embedded playback for this video.":e?.data===153?"YouTube could not verify the embed request. Check the deployment domain and player origin.":"YouTube could not play this Short. It may be unavailable, restricted, or the connection was interrupted.")}
      }});
    };
@@ -609,10 +622,11 @@ function ShortsPlayer({video,user,onOpen,onNotice,onNavigate,ad=false,playbackKe
  return <article className={`shortCard ${ad?"shortAdCard":""}`} ref={box}>
    <div className="shortPlayer">
      {isDrive?<iframe className="shortYT shortDriveFrame" src={embed} title={video.title||"Sponsored video"} allow="autoplay; fullscreen" allowFullScreen onLoad={()=>{setReady(true);if(visibleRef.current)armImpression()}}/>:<div id={id} className="shortYT"/>}
-     {!isDrive&&ready&&!playing&&<button className="shortPlaybackFallback" onClick={e=>{e.stopPropagation();try{player.current?.playVideo();player.current?.unMute();setPlaying(true)}catch{onNotice?.("YouTube player is not ready. Check your connection and try again.")}}} aria-label="Play Short">▶ <span>Tap to play</span></button>}
+     {!isDrive&&!started&&<img className="shortPoster" src={video.thumb||`https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`} alt="" decoding="async" loading="lazy" draggable="false" onError={e=>{e.currentTarget.style.display="none"}}/>}
+     {!isDrive&&ready&&!playing&&<button className="shortPlaybackFallback" onClick={e=>{e.stopPropagation();try{player.current?.playVideo();player.current?.unMute();setPlaying(true)}catch{onNotice?.("YouTube player is not ready. Check your connection and try again.")}}} aria-label="Play Short"><Icon name="play" size={20}/> <span>Tap to play</span></button>}
      {ad&&<div className="shortTopline"><span>SPONSORED</span></div>}
      <div className="shortGradient" aria-hidden="true"/>
-     <div className="shortRail shortNavigationRail" onClick={e=>e.stopPropagation()}><button className="shortRailButton" onClick={()=>onNavigate?.(-1)} aria-label="Previous Short" title="Previous Short"><span>↑</span></button><button className="shortRailButton" onClick={()=>onNavigate?.(1)} aria-label="Next Short" title="Next Short"><span>↓</span></button><button className="shortRailButton shortMoreButton" onClick={()=>setQuickMenuOpen(v=>!v)} aria-label="More options" title="More options"><span>⋮</span></button>{quickMenuOpen&&<><button className="quickMenuDismiss" aria-label="Close menu" onClick={()=>setQuickMenuOpen(false)}></button><div className="shortQuickMenu" role="menu">{[["ads","Ads Studio"],["settings","Settings"],["watchlist","Saved videos"],["history","Watch history"],["about","About Kivora"],["privacy","Privacy policy"],["terms","Terms of service"],["creators","Creators & rights holders"],["signout","Sign out"]].map(([action,label])=><button key={action} role="menuitem" onClick={()=>{setQuickMenuOpen(false);window.dispatchEvent(new CustomEvent("kivora:quick-menu",{detail:action}));}}>{label}</button>)}</div></>}</div>
+     <div className="shortRail shortNavigationRail" onClick={e=>e.stopPropagation()}><button className="shortRailButton" onClick={()=>onNavigate?.(-1)} aria-label="Previous Short" title="Previous Short"><span><Icon name="arrowUp" size={22}/></span></button><button className="shortRailButton" onClick={()=>onNavigate?.(1)} aria-label="Next Short" title="Next Short"><span><Icon name="arrowDown" size={22}/></span></button><button className="shortRailButton shortMoreButton" onClick={()=>setQuickMenuOpen(v=>!v)} aria-label="More options" title="More options"><span><Icon name="more" size={22}/></span></button>{quickMenuOpen&&<><button className="quickMenuDismiss" aria-label="Close menu" onClick={()=>setQuickMenuOpen(false)}></button><div className="shortQuickMenu" role="menu">{[["ads","Ads Studio"],["settings","Settings"],["watchlist","Saved videos"],["history","Watch history"],["about","About Kivora"],["privacy","Privacy policy"],["terms","Terms of service"],["creators","Creators & rights holders"],["signout","Sign out"]].map(([action,label])=><button key={action} role="menuitem" onClick={()=>{setQuickMenuOpen(false);window.dispatchEvent(new CustomEvent("kivora:quick-menu",{detail:action}));}}>{label}</button>)}</div></>}</div>
      <div className="shortBottomInfo" onClick={e=>e.stopPropagation()}><div className="shortCreator"><span className="shortAvatar">{(video.channelTitle||"Y").slice(0,1).toUpperCase()}</span><b>{video.channelTitle||"YouTube"}</b></div><h2>{video.title}</h2><p className="shortDescriptionPreview">{video.desc?`${video.desc.slice(0,20)}${video.desc.length>20?"…":""}`:""}{video.desc?.length>20&&<button className="descriptionMore" onClick={()=>setDescriptionOpen(true)}>more</button>}</p>{ad&&<div className="shortAdMeta"><span>Sponsored · Kivora</span>{isDrive?<small>Hosted by Google Drive</small>:<small>Provided by YouTube</small>}</div>}</div>
      {descriptionOpen&&<div className="shortDescriptionBackdrop" onClick={()=>setDescriptionOpen(false)}><section className="shortDescriptionSheet" role="dialog" aria-modal="true" aria-label="Video description" onClick={e=>e.stopPropagation()}><header><b>Video description</b><button onClick={()=>setDescriptionOpen(false)} aria-label="Close description">×</button></header><h3>{video.title}</h3><p>{video.desc||"No description provided."}</p><small>{video.channelTitle||"YouTube"}</small></section></div>}
    </div>
@@ -843,3 +857,5 @@ class StartupErrorBoundary extends React.Component {
 const rootElement=document.getElementById("root");
 if(rootElement) createRoot(rootElement).render(<StartupErrorBoundary><App/></StartupErrorBoundary>);
 
+// Warm the YouTube player script as soon as the app loads so the first Short starts faster.
+if(typeof window!=="undefined"){try{loadYouTubeApi(()=>{})}catch{}}

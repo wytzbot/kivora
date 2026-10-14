@@ -660,3 +660,67 @@ main:has(.shortCard) .shortDestinationBanner{flex:0 0 62px!important;min-height:
 
 @media(max-width:380px){.brand>span:not(.brandGlyph){display:none}.categoryTriggerIcon,.categoryCurrent{display:none!important}.categoryTrigger{padding:6px 8px!important;gap:4px!important}.topActions{gap:4px!important}}
 main:has(.shortCard) .feedSentinel{height:1px!important;min-height:1px!important;max-height:1px!important;flex:0 0 1px!important;overflow:hidden!important;margin:0!important;padding:0!important;border:0!important;font-size:0!important}
+
+/* ==========================================================================
+   Kivora v-final: one Short = exactly one viewport page (no peeking neighbours)
+   The app shell is locked to the live viewport; the feed is the only scroller
+   and every card is exactly the feed's height, so snap points line up.
+   ========================================================================== */
+:root{--kv-topbar:70px}
+@media(max-width:700px){:root{--kv-topbar:60px}}
+html:has(.shortCard),body:has(.shortCard){height:100%;overflow:hidden;overscroll-behavior:none;scroll-behavior:auto}
+html body .app:has(.shortCard){height:100vh;height:100dvh;min-height:0!important;max-height:100dvh;display:flex!important;flex-direction:column;overflow:hidden!important}
+html body .app:has(.shortCard)>.topbar{flex:0 0 var(--kv-topbar);height:var(--kv-topbar)!important;min-height:var(--kv-topbar)!important;position:relative!important;top:auto!important}
+html body .app:has(.shortCard)>main{flex:1 1 0;min-height:0!important;height:auto!important;overflow:hidden!important;position:relative}
+html body .app:has(.shortCard) main .feed{height:100%!important;max-height:100%!important;min-height:0!important;padding:0!important;margin:0!important;display:block!important;overflow-y:auto!important;overflow-x:hidden!important;scroll-snap-type:y mandatory!important;scroll-padding:0!important;scroll-behavior:auto!important;overscroll-behavior-y:contain!important;-webkit-overflow-scrolling:touch}
+html body .app:has(.shortCard) main .feed>.shortCard{display:flex!important;flex-direction:column!important;box-sizing:border-box!important;width:100%!important;height:100%!important;min-height:100%!important;max-height:100%!important;margin:0!important;padding:0!important;border:0!important;flex:none;scroll-snap-align:start!important;scroll-snap-stop:always!important;overflow:hidden!important;contain:layout paint}
+html body .app:has(.shortCard) main .feed>.shortCard .shortPlayer{flex:1 1 0!important;min-height:0!important;height:auto!important;max-height:none!important}
+html body .app:has(.shortCard) main .feed>.shortCard:has(.shortDestinationBanner) .shortPlayer{flex:1 1 0!important;height:auto!important}
+html body .app:has(.shortCard) main .feed>.shortCard .shortYT iframe{object-fit:cover!important}
+html body .app:has(.shortCard) main .feed>.feedSentinel{display:block;height:1px!important;min-height:1px!important;max-height:1px!important;scroll-snap-align:none;opacity:0}
+
+/* Professional SVG icon set */
+.kIcon{display:block;flex:0 0 auto;pointer-events:none}
+.headerIconButton,.menuBtn,.shortRailButton span,.categoryTriggerIcon,.categoryChevron{display:inline-grid;place-items:center;line-height:0}
+.headerIconButton .kIcon,.menuBtn .kIcon{width:22px;height:22px}
+.categoryTriggerIcon{color:var(--accent)}
+.brandGlyph{background:linear-gradient(145deg,#8b7bff 0%,#5b3df5 55%,#e04b9c 130%)!important;box-shadow:0 4px 14px rgba(110,80,255,.45),inset 0 1px 0 rgba(255,255,255,.35)}
+.shortPlaybackFallback{display:inline-flex!important;align-items:center;gap:8px}
+.shortNavigationRail .shortRailButton .kIcon{width:22px;height:22px}
+
+/* ==== Fast video start: poster shows instantly, fades once playback begins ==== */
+.shortPlayer .shortPoster{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1;pointer-events:none;background:#000;animation:kvPosterIn .2s ease-out}
+@keyframes kvPosterIn{from{opacity:0}to{opacity:1}}
+.shortYT{background:#000}
+
+/* ==== Menus: never truncated, always scrollable ==== */
+.menuPanel{max-height:calc(100dvh - var(--kv-topbar,68px) - 16px)!important;overflow-y:auto!important;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-width:thin;z-index:200}
+@media(max-width:700px){.menuPanel{position:fixed!important;top:calc(var(--kv-topbar,60px) + 6px)!important;left:10px!important;right:10px!important;width:auto!important;padding-bottom:calc(14px + env(safe-area-inset-bottom,0px))!important}}
+.menuPanel button,.menuPanel summary{min-height:44px}
+.categoryMenu{max-height:min(60dvh,360px)!important;overflow-y:auto!important;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+.shortQuickMenu{max-height:min(60dvh,420px)!important;overflow-y:auto!important;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+
+/* ==== Ads Studio: mobile-first, readable in light & dark ==== */
+.steps{display:grid;grid-template-columns:1fr;gap:10px}
+.steps div,.panel .steps div{background:#f4f1ec!important;color:#111!important;border:1px solid rgba(0,0,0,.08);padding:14px 16px;border-radius:14px;font-size:15px;line-height:1.55}
+.steps div b{color:#000}
+.legal .noticeBox,.legal .noticeBox p,.legal .noticeBox b{color:#111!important}
+.legal .noticeBox{background:#f3f0ea!important}
+.panel{margin:12px 12px calc(24px + env(safe-area-inset-bottom,0px))!important;padding:18px!important;max-width:none}
+.panel h1{font-size:clamp(26px,7vw,34px)!important;line-height:1.15}
+.panel form{grid-template-columns:1fr}
+.panel input,.panel select,.panel textarea{width:100%;min-height:48px;font-size:16px!important;padding:12px 14px;border-radius:12px;background:var(--surface2);color:var(--text);border:1px solid var(--line)}
+.panel textarea{min-height:96px}
+.panel button{min-height:48px}
+.panel button.primary,.panel form button[type=submit]{width:100%}
+.campaignMonitor{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.campaignMonitor>div{min-width:0;padding:12px;border-radius:14px;background:var(--surface2);border:1px solid var(--line)}
+.campaignMonitor b{display:block;font-size:clamp(15px,4.4vw,20px);overflow-wrap:anywhere}
+.campaignRow{grid-template-columns:1fr!important}
+.priceBox{overflow-wrap:anywhere}
+.panel table{display:block;overflow-x:auto;max-width:100%}
+@media(min-width:760px){
+  .panel{max-width:760px;margin:28px auto!important;padding:28px!important}
+  .steps{grid-template-columns:1fr 1fr}
+  .campaignMonitor{grid-template-columns:repeat(3,minmax(0,1fr))}
+}

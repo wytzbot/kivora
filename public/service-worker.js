@@ -1,9 +1,9 @@
 /* Kivora PWA worker v2: network-first app code prevents stale auth/startup bundles. */
 const CACHE_PREFIX = 'kivora-pwa-';
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const SHELL_CACHE = `${CACHE_PREFIX}shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `${CACHE_PREFIX}runtime-${CACHE_VERSION}`;
-const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
+const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/icon.svg'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(SHELL_CACHE).then(async cache => {
@@ -24,6 +24,15 @@ self.addEventListener('fetch', event => {
   const request = event.request;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
+  // YouTube thumbnails: stale-while-revalidate so posters appear instantly on repeat views.
+  if (url.hostname === 'i.ytimg.com' && request.destination === 'image') {
+    event.respondWith(caches.open(RUNTIME_CACHE).then(async cache => {
+      const cached = await cache.match(request);
+      const network = fetch(request).then(r => { if (r && (r.ok || r.type === 'opaque')) cache.put(request, r.clone()); return r; }).catch(() => cached);
+      return cached || network;
+    }));
+    return;
+  }
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/__/auth/')) return;
 
