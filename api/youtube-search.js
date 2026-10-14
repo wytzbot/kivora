@@ -88,7 +88,9 @@ function matchesCategory(item, category) {
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('Access-Control-Allow-Methods','GET,POST,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');
   if(req.method==='OPTIONS') return res.status(204).end();
-  res.setHeader("Cache-Control", "s-maxage=600, stale-while-revalidate=1800");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  res.setHeader("CDN-Cache-Control", "no-store");
+  res.setHeader("Vercel-CDN-Cache-Control", "no-store");
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
 
@@ -134,7 +136,7 @@ export default async function handler(req, res) {
   const categoryTerms = industryQueries(category);
   const queries = [
     q
-      ? `${q} #shorts -recap -explained -review -reaction -trailer`
+      ? `${q} -recap -explained -review -reaction -trailer`
       : categoryTerms[0]
   ];
 

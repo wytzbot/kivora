@@ -247,3 +247,6 @@ Ad impressions are viewer events, not advertiser events. The delivery endpoint a
 
 ## Shared Flutterwave webhook
 Kivora campaign checkout references start with `KIVORA-` and are handled by the existing WyDev Flutterwave webhook endpoint. The webhook verifies the transaction with Flutterwave, checks reference/amount/currency, then marks the matching Kivora campaign paid and ready. Kivora does not need a second Flutterwave webhook URL.
+
+### Daily quota graceful fallback
+Kivora persists a small, bounded copy of successfully discovered video metadata by category and exact search phrase in localStorage. When YouTube returns a quota-exhaustion error, the app silently displays matching saved results rather than showing a quota popup. Explicit searches only use cache for the same query; category feeds may fall back to the category cache and then the general feed. Watched-video filtering remains enabled for normal discovery, while deliberate search can return a previously watched result. Cached metadata does not cache or download video media; playback still uses YouTube's official embedded player.

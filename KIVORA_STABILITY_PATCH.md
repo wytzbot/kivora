@@ -18,3 +18,11 @@ This patch addresses several concrete problems from the reported mobile experien
 4. The YouTube IFrame Player can still refuse playback for private, age-restricted, region-restricted, removed, or non-embeddable videos. Kivora cannot override those restrictions.
 5. Location target mode is persisted on campaigns, but production delivery must still compare the viewer's explicitly consented approximate location against campaign targeting before serving an ad. A Google Maps OAuth scope is not the permission mechanism for browser geolocation; browser geolocation permission and a properly secured Maps/Geocoding API integration are separate concerns.
 6. Build verification was not completed in this environment because npm dependencies could not be installed (network/package registry unavailable). Run `npm install` and `npm run build` before deploying.
+
+## Update 4 — category-based ad targeting
+
+- Removed the country targeting control from Ad Studio and replaced it with a category checklist matching the feed categories.
+- Campaign records now store validated `targetCategories`.
+- Eligible sponsored Shorts are ordered so category-matching campaigns are preferred; other eligible campaigns remain available as fallback to help finish delivery. Matching is a preference, not a promise of impressions or guaranteed delivery.
+- Added responsive touch-friendly category controls.
+- Payment still requires server-side Flutterwave verification before a campaign is marked ready; impression qualification and target caps remain server-side.
