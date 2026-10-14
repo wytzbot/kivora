@@ -602,9 +602,12 @@ function ShortsPlayer({video,user,onOpen,onNotice,onNavigate,ad=false,playbackKe
    loadYouTubeApi(()=>{
      const target=box.current;
      if(!target){start();return;}
+     // Root must be the scrolling .feed: with the default (viewport) root the feed's overflow clip
+     // hides off-screen cards, so rootMargin never preloaded anything and each player only started
+     // once its card was already visible. Rooted at the feed, the next/previous Shorts are ready in advance.
      playerObserver=new IntersectionObserver(entries=>{
        if(entries.some(entry=>entry.isIntersecting)){start();playerObserver?.disconnect();}
-     },{rootMargin:"100% 0px",threshold:0});
+     },{root:target.closest(".feed")||null,rootMargin:"150% 0px",threshold:0});
      playerObserver.observe(target);
    });
    return()=>{cancelled=true;playerObserver?.disconnect();disarmImpression();try{player.current?.destroy()}catch{}player.current=null};
@@ -615,7 +618,7 @@ function ShortsPlayer({video,user,onOpen,onNotice,onNavigate,ad=false,playbackKe
    const observer=new IntersectionObserver(entries=>{
      const entry=entries[0];if(!entry)return;
      const ratio=Number(entry.intersectionRatio||0);setVisibleRatio(ratio);
-     const active=entry.isIntersecting&&ratio>=.72;visibleRef.current=active;
+     const active=entry.isIntersecting&&ratio>=.55;visibleRef.current=active;
      if(!player.current||!ready){if(active&&isDrive)armImpression();else if(!active)disarmImpression();return;}
      try{if(active){if(audioConsent)player.current.unMute();player.current.playVideo();setPlaying(true);armImpression()}else{player.current.pauseVideo();setPlaying(false);disarmImpression()}}catch{}
    },{threshold:[0,.5,.72,.9],rootMargin:'0px'});

@@ -149,7 +149,7 @@ export default async function handler(req, res) {
         part: "snippet", q: term, type: "video", maxResults: "25",
         order: category === "new" ? "date" : "relevance",
         regionCode: "NG", safeSearch: "moderate", videoEmbeddable: "true",
-        videoSyndicated: "true", videoCaption: "any", key
+        videoSyndicated: "true", videoCaption: "any", videoDuration: "any", key
       });
       if (pageTokens[queryIndex]) params.set("pageToken", pageTokens[queryIndex]);
       const officialCategoryIds=YOUTUBE_CATEGORY_IDS[category]||[];
