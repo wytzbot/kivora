@@ -206,7 +206,7 @@ function App(){
      const result=await fetchKivoraVideos(query.trim(),category,pageTokens);
      setVideos(prev=>{
        const seen=new Set(prev.map(v=>v.id));
-       return [...prev,...result.items.filter(v=>!seen.has(v.id))];
+       return [...prev,...result.items.filter(v=>v?.id&&!seen.has(v.id)&&seen.add(v.id))];
      });
      setPageTokens(result.nextPageTokens);
      setHasMore(result.nextPageTokens.some(Boolean));
@@ -371,13 +371,17 @@ function App(){
         const recScore=(viewerRating/5)*60 + Math.min(40,engagement*2.2);
         return {...v,recScore};
       });
+      const seenVideoIds=new Set();
+      const uniqueRanked=ranked.filter(v=>{const id=String(v.id||"");if(!id||seenVideoIds.has(id))return false;seenVideoIds.add(id);return true;});
+      ranked.length=0;ranked.push(...uniqueRanked);
       if(shuffleOrder.length){const order=new Map(shuffleOrder.map((id,index)=>[id,index]));ranked.sort((a,b)=>(order.get(a.id)??Number.MAX_SAFE_INTEGER)-(order.get(b.id)??Number.MAX_SAFE_INTEGER));}
       else ranked.sort((a,b)=>category==="new"?new Date(b.publishedAt||0)-new Date(a.publishedAt||0):b.recScore-a.recScore);
       const cards=[];
-      const eligibleSponsored=sponsored.filter(item=>item.assetSource!=="drive");
+      const eligibleSponsored=sponsored.filter((item,idx,arr)=>item.assetSource!=="drive"&&arr.findIndex(o=>o.id===item.id)===idx);
+      const shownAdIds=new Set();
       ranked.forEach((v,i)=>{
         cards.push(<ShortsPlayer key={v.id} video={v} user={user} onOpen={openVideo} onNotice={setNotice} onNavigate={jumpVideo} audioConsent={audioConsent}/>);
-        if(eligibleSponsored.length && (i+1)%8===0){const ad=eligibleSponsored[Math.min(Math.floor(i/8),eligibleSponsored.length-1)];const adVideo={id:ad.assetSource==="drive"?ad.assetId:extractYouTubeId(ad.assetId||ad.youtubeUrl||""),source:ad.assetSource||"youtube",assetId:ad.assetId,title:ad.title||"Sponsored Short",channelTitle:ad.brand||"Advertiser",durationSeconds:Number(ad.durationSeconds||ad.duration||30),site:ad.site||"",destinationName:ad.destinationName||ad.brand||"",siteIcon:ad.siteIcon||"",promotionType:ad.promotionType||"short",};if(adVideo.id)cards.push(<ShortsPlayer key={`ad-${ad.id}-${i}`} video={adVideo} user={user} onNotice={setNotice} onNavigate={jumpVideo} ad playbackKey={ad.id} campaignId={ad.id} audioConsent={audioConsent}/>);}
+        if(eligibleSponsored.length && (i+1)%8===0 && Math.floor(i/8)<eligibleSponsored.length){const ad=eligibleSponsored[Math.floor(i/8)];const adVideo={id:ad.assetSource==="drive"?ad.assetId:extractYouTubeId(ad.assetId||ad.youtubeUrl||""),source:ad.assetSource||"youtube",assetId:ad.assetId,title:ad.title||"Sponsored Short",channelTitle:ad.brand||"Advertiser",durationSeconds:Number(ad.durationSeconds||ad.duration||30),site:ad.site||"",destinationName:ad.destinationName||ad.brand||"",siteIcon:ad.siteIcon||"",promotionType:ad.promotionType||"short",};if(adVideo.id&&!seenVideoIds.has(adVideo.id)&&!shownAdIds.has(adVideo.id)){shownAdIds.add(adVideo.id);cards.push(<ShortsPlayer key={`ad-${ad.id}-${i}`} video={adVideo} user={user} onNotice={setNotice} onNavigate={jumpVideo} ad playbackKey={ad.id} campaignId={ad.id} audioConsent={audioConsent}/>);}}
       });
       if(!cards.length&&!videoLoading)cards.push(<section className="emptyState" key="empty"><h3>No videos to show</h3><p>Try another category or search term.</p></section>);
       return cards;

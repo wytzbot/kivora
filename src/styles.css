@@ -148,7 +148,7 @@ html,body{background:var(--bg);color:var(--text)}body{font-size:17px;line-height
 
 /* Kivora Shorts-first feed */
 .feed{max-width:760px!important;margin:18px auto 30px!important;gap:22px!important}
-.shortCard{background:var(--surface);border:1px solid var(--line);border-radius:22px;overflow:hidden;box-shadow:var(--shadow);scroll-margin-top:78px}
+.shortCard{background:var(--surface);border:1px solid var(--line);border-radius:22px;overflow:hidden;box-shadow:var(--shadow);scroll-margin:0}
 .shortPlayer{position:relative;width:100%;aspect-ratio:9/16;max-height:min(78vh,760px);background:#050505;overflow:hidden;display:grid;place-items:center}
 .shortYT{width:100%;height:100%}
 .shortYT iframe{width:100%!important;height:100%!important;border:0;display:block}
@@ -754,3 +754,10 @@ html body .app:has(.shortCard) main .feed>.shortCard .shortYT iframe{
   background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.55) 20%,rgba(255,255,255,.55) 80%,rgba(255,255,255,0))}
 .shortCard::before{top:0}
 .shortCard::after{bottom:0}
+
+
+/* ==== Snap alignment fix: one swipe = exactly one Short, no leftover offset ====
+   A legacy scroll-margin-top made every snap point land early, so the previous Short peeked
+   under the header and the current one was cut off until the user nudged the feed. */
+html body .app:has(.shortCard) main .feed{scroll-padding:0!important;overflow-anchor:none}
+html body .app:has(.shortCard) main .feed>.shortCard{scroll-margin:0!important;scroll-snap-align:start!important;scroll-snap-stop:always!important}
