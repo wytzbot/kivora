@@ -144,7 +144,7 @@ function App(){
    const payment=params.get("payment");
    const campaignId=params.get("campaignId");
    const transactionId=params.get("transaction_id");
-   if(payment!=="campaign"||!campaignId||!transactionId)return;
+   if(payment!=="campaign"||!campaignId)return;
    let cancelled=false;
    (async()=>{
      try{
@@ -152,7 +152,7 @@ function App(){
        if(!u||u.isAnonymous)return;
        let r,d={};
        for(let attempt=0;attempt<4&&!cancelled;attempt++){
-         r=await authedFetch(apiUrl("/api/ad-campaign?action=verify"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({campaignId,transactionId})});
+         r=await authedFetch(apiUrl("/api/ad-campaign?action=verify"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({campaignId,transactionId:transactionId||""})});
          d=await r.json().catch(()=>({}));
          if(r.ok&&d.verified)break;
          if(r.status!==402)break;

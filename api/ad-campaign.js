@@ -88,17 +88,21 @@ async function createCampaign(req,res){
   const db=adminDb(); await db.collection('campaigns').doc(id).set(campaign);
   if(bill.ownerBillingBypass) return res.status(200).json({campaignId:id,paymentRequired:false,campaign});
   const payment=await createHostedPayment({email:user.email,name:user.name||user.email,campaignId:id,amountNgn:bill.totalNgn});
-  await db.collection('campaigns').doc(id).update({paymentReference:payment.tx_ref,paymentLink:payment.link,updatedAt:new Date().toISOString()});
+  await db.collection('campaigns').doc(id).update({paymentReference:payment.tx_ref,paymentLink:payment.link,paymentChargeId:payment.chargeId||'',updatedAt:new Date().toISOString()});
   return res.status(200).json({campaignId:id,paymentRequired:true,paymentLink:payment.link,amountNgn:bill.totalNgn,currency:'NGN'});
 }
 
 async function verifyPayment(req,res){
-  const user=await requireUser(req); const b=req.body||{}; const id=String(b.campaignId||'').trim(); const transactionId=String(b.transactionId||'').trim();
-  if(!id||!transactionId) throw new Error('campaignId and transactionId are required.');
+  const user=await requireUser(req); const b=req.body||{}; const id=String(b.campaignId||'').trim(); let transactionId=String(b.transactionId||'').trim();
+  if(!id) throw new Error('campaignId is required.');
   const db=adminDb(); const ref=db.collection('campaigns').doc(id); const snap=await ref.get();
   if(!snap.exists) return res.status(404).json({error:'Campaign not found.'});
   const campaign=snap.data()||{}; if(campaign.advertiserId!==user.uid) return res.status(403).json({error:'Campaign access denied.'});
   if(campaign.status==='cancelled') return res.status(409).json({error:'This campaign was cancelled.'});
+  if(campaign.paymentStatus==='verified') return res.status(200).json({verified:true,campaignId:id});
+  // v4 charges are verified by the charge id stored when the checkout was created.
+  if(campaign.paymentChargeId) transactionId=campaign.paymentChargeId;
+  if(!transactionId) return res.status(402).json({error:'Payment is not verified yet.',status:'pending'});
   const verification=await verifyHostedPayment({transactionId,expectedReference:campaign.paymentReference,expectedAmount:campaign.totalBudgetNgn,expectedCurrency:'NGN'});
   if(!verification.success) return res.status(402).json({error:'Payment is not verified yet.',status:verification.status||'pending'});
   await ref.update({paymentStatus:'verified',status:'ready',paymentTransactionId:transactionId,paidAmount:verification.amount,updatedAt:new Date().toISOString()});

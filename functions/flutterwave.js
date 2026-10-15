@@ -1,8 +1,11 @@
 // Flutterwave v4 hosted checkout + server-side transaction verification.
 // Client credentials are server-only. Never expose them through VITE_ variables.
+import { randomUUID } from 'node:crypto';
 import { isKivoraOwnerEmail } from './access.js';
 
-const API_BASE = process.env.FLW_API_BASE_URL || 'https://api.flutterwave.com/v4';
+// v4 live: https://f4bexperience.flutterwave.com  |  v4 test: https://developersandbox-api.flutterwave.com
+// (api.flutterwave.com is the v3 host and has no /v4 routes.)
+const API_BASE = String(process.env.FLW_API_BASE_URL || 'https://f4bexperience.flutterwave.com').replace(/\/$/, '');
 const TOKEN_URL = process.env.FLW_TOKEN_URL || 'https://idp.flutterwave.com/realms/flutterwave/protocol/openid-connect/token';
 let cachedToken = '';
 let tokenExpiresAt = 0;
@@ -47,6 +50,8 @@ async function apiRequest(path, options = {}) {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
       Accept: 'application/json',
+      'X-Trace-Id': randomUUID(),
+      'X-Idempotency-Key': randomUUID(),
       ...(options.headers || {})
     }
   });
@@ -109,33 +114,51 @@ export async function createHostedPayment({ email, name, campaignId, amountNgn }
   const redirect_url = `${(configuredRedirect || host).replace(/\/$/, '')}/?payment=campaign&campaignId=${encodeURIComponent(campaignId)}`;
 
   // Flutterwave v4 payment creation. Store tx_ref on the campaign and verify it server-side.
-  const call = secretKey() ? apiRequestV3 : apiRequest;
-  const data = await call('/payments', {
+  if (secretKey()) {
+    // Optional: classic hosted checkout (all payment methods) when a v3 secret key is configured.
+    const data = await apiRequestV3('/payments', {
+      method: 'POST',
+      body: JSON.stringify({
+        tx_ref, amount: String(amount), currency: 'NGN', redirect_url,
+        customer: { email, name: name || email },
+        customizations: { title: 'Kivora sponsored Short', description: `Kivora campaign ${campaignId}` },
+        meta: { product: 'kivora', campaignId }
+      })
+    });
+    const link = (data?.data || data)?.link;
+    if (!link) throw new Error('Flutterwave did not return a hosted checkout URL.');
+    return { tx_ref, link, chargeId: '' };
+  }
+
+  // Flutterwave v4 (Client ID / Client Secret): orchestrated direct charge. OPay returns a hosted
+  // redirect page, so no card data ever touches Kivora.
+  const person = String(name || email || 'Kivora Advertiser').trim().split(/\s+/);
+  const data = await apiRequest('/orchestration/direct-charges', {
     method: 'POST',
     body: JSON.stringify({
-      tx_ref,
-      amount: String(amount),
+      reference: tx_ref,
+      amount,
       currency: 'NGN',
       redirect_url,
-      customer: { email, name: name || email },
-      customizations: {
-        title: 'Kivora sponsored Short',
-        description: `Kivora campaign ${campaignId}`
-      },
-      meta: { product: 'kivora', campaignId }
+      customer: { email, name: { first: person[0] || 'Kivora', last: person.slice(1).join(' ') || 'Advertiser' } },
+      payment_method: { type: 'opay' }
     })
   });
-  const paymentData = data?.data || data;
-  const link = paymentData?.link || paymentData?.checkout_url || paymentData?.payment_link;
-  if (!link) throw new Error('Flutterwave v4 did not return a hosted checkout URL.');
-  return { tx_ref, link };
+  const charge = data?.data || data;
+  const action = charge?.next_action || {};
+  const link = action?.redirect_url?.url || action?.redirect_url;
+  if (typeof link !== 'string' || !/^https:\/\//i.test(link)) {
+    console.error('Flutterwave v4 charge had no redirect link:', JSON.stringify(data).slice(0, 600));
+    throw new Error(`Flutterwave created the charge but returned no payment page (status: ${charge?.status || 'unknown'}, next action: ${action?.type || 'none'}).`);
+  }
+  return { tx_ref, link, chargeId: String(charge?.id || '') };
 }
 
 export async function verifyHostedPayment({ transactionId, expectedReference, expectedAmount, expectedCurrency = 'NGN' }) {
   const id = encodeURIComponent(String(transactionId));
   let data;
   try {
-    data = await (secretKey() ? apiRequestV3 : apiRequest)(`/transactions/${id}/verify`, { method: 'GET' });
+    data = await (secretKey() ? apiRequestV3(`/transactions/${id}/verify`, { method: 'GET' }) : apiRequest(`/charges/${id}`, { method: 'GET' }));
   } catch (error) {
     return { success: false, status: error?.message || 'verification_failed' };
   }
