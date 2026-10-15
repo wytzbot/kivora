@@ -51,10 +51,43 @@ async function apiRequest(path, options = {}) {
     }
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    console.error('Flutterwave v4 API request failed:', response.status, data?.message || data?.error || '');
-    throw new Error(data?.message || data?.error || 'Flutterwave v4 request failed.');
-  }
+  if (!response.ok) throw flwError('v4', path, response.status, data);
+  return data;
+}
+
+function flwDetail(data) {
+  const e = data?.error;
+  const parts = [data?.message, typeof e === 'string' ? e : e?.message, e?.code, e?.type,
+    ...(Array.isArray(e?.validation_errors) ? e.validation_errors.map(v => v?.field_name ? `${v.field_name}: ${v.message}` : v?.message) : [])]
+    .filter(Boolean).map(String);
+  return [...new Set(parts)].join(' — ');
+}
+
+function flwError(version, path, status, data) {
+  const detail = flwDetail(data);
+  console.error(`Flutterwave ${version} ${path} failed:`, status, JSON.stringify(data || {}).slice(0, 600));
+  const hint = status === 404 || status === 405
+    ? ' (this endpoint does not exist on this API version; hosted checkout needs FLW_SECRET_KEY)'
+    : status === 401 || status === 403 ? ' (check the Flutterwave key and that it matches live/test mode)' : '';
+  return new Error(`Flutterwave ${version} request failed (HTTP ${status})${detail ? ': ' + detail : ''}${hint}`);
+}
+
+// Hosted checkout ("Flutterwave Standard") lives on the v3 API and is authorised with the account's secret key.
+const V3_BASE = process.env.FLW_V3_BASE_URL || 'https://api.flutterwave.com/v3';
+function secretKey() { return String(process.env.FLW_SECRET_KEY || '').trim(); }
+
+async function apiRequestV3(path, options = {}) {
+  const response = await fetch(`${V3_BASE}${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${secretKey()}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      ...(options.headers || {})
+    }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.status === 'error') throw flwError('v3', path, response.status, data);
   return data;
 }
 
@@ -76,7 +109,8 @@ export async function createHostedPayment({ email, name, campaignId, amountNgn }
   const redirect_url = `${(configuredRedirect || host).replace(/\/$/, '')}/?payment=campaign&campaignId=${encodeURIComponent(campaignId)}`;
 
   // Flutterwave v4 payment creation. Store tx_ref on the campaign and verify it server-side.
-  const data = await apiRequest('/payments', {
+  const call = secretKey() ? apiRequestV3 : apiRequest;
+  const data = await call('/payments', {
     method: 'POST',
     body: JSON.stringify({
       tx_ref,
@@ -101,7 +135,7 @@ export async function verifyHostedPayment({ transactionId, expectedReference, ex
   const id = encodeURIComponent(String(transactionId));
   let data;
   try {
-    data = await apiRequest(`/transactions/${id}/verify`, { method: 'GET' });
+    data = await (secretKey() ? apiRequestV3 : apiRequest)(`/transactions/${id}/verify`, { method: 'GET' });
   } catch (error) {
     return { success: false, status: error?.message || 'verification_failed' };
   }
