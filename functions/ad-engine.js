@@ -1,9 +1,9 @@
 import { isKivoraOwnerEmail } from "./access.js";
 
 // Server-authoritative advertising billing.
-// Kivora video placements: $1.00 (about ₦1,300) per campaign block, targeting an estimated 3,000–4,500 qualified impressions.
-// A qualified impression requires meaningful viewability; raw iframe loads are not billable.
-export const IMPRESSION_BLOCK_SIZE = 4500;
+// Kivora video placements: $1.00 (about ₦1,300) per campaign block, targeting an up to 3,000 qualified impressions per $1 block.
+// A qualified impression requires meaningful viewability; raw iframe loads are not billable. Each block of up to 3,000 target impressions costs $1 (about ₦1,300).
+export const IMPRESSION_BLOCK_SIZE = 3000;
 export const MIN_TARGET_IMPRESSIONS = 3000;
 export const VIDEO_PRICE_PER_BLOCK_USD = 1.00;
 export const PRICE_PER_BLOCK_USD = VIDEO_PRICE_PER_BLOCK_USD;

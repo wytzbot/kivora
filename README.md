@@ -32,7 +32,7 @@ The Pro entitlement is checked from a server-issued Firebase Auth custom claim (
 - Sponsored app/site campaigns require an HTTPS destination URL and name. Short-only campaigns use a YouTube destination.
 - Billing is $1 (about ₦1,300) per campaign targeting approximately 3,000–4,500 qualified impressions. A qualified exposure requires at least 2 seconds and at least 50% visibility.
 - Impression counters and campaign payment state are server-authoritative. Firestore client writes to `campaigns` and `impressionEvents` are disabled; server endpoints use Firebase Admin.
-- Configure `FIREBASE_SERVICE_ACCOUNT_JSON` and `FLW_SECRET_KEY` as Vercel server environment variables. Never put either secret in `VITE_*` variables.
+- Configure `FIREBASE_SERVICE_ACCOUNT_JSON` and `FLW_CLIENT_ID and FLW_CLIENT_SECRET` as Vercel server environment variables. Never put either secret in `VITE_*` variables.
 - Advertiser checkout uses Flutterwave's hosted checkout endpoint server-side, then verifies the transaction before changing a campaign to `ready`.
 
 ## Advertising: video-only campaigns, links and expense monitoring

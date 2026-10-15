@@ -1,28 +1,118 @@
-// Hosted Flutterwave checkout + server-side verification.
-// The merchant secret is never exposed to the browser.
+// Flutterwave v4 hosted checkout + server-side transaction verification.
+// Client credentials are server-only. Never expose them through VITE_ variables.
 import { isKivoraOwnerEmail } from './access.js';
 
-const BASE='https://api.flutterwave.com/v3';
-function secret(){const v=process.env.FLW_SECRET_KEY||process.env.FLUTTERWAVE_SECRET_KEY; if(!v) throw new Error('FLW_SECRET_KEY is not configured on the server.'); return v}
-function ref(){return `KIVORA-${Date.now()}-${Math.random().toString(36).slice(2,10)}`.replace(/[^A-Za-z0-9-]/g,'').slice(0,42)}
+const API_BASE = process.env.FLW_API_BASE_URL || 'https://api.flutterwave.com/v4';
+const TOKEN_URL = process.env.FLW_TOKEN_URL || 'https://idp.flutterwave.com/realms/flutterwave/protocol/openid-connect/token';
+let cachedToken = '';
+let tokenExpiresAt = 0;
 
-export function shouldBypassBilling(authenticatedEmail){return isKivoraOwnerEmail(authenticatedEmail)}
-
-export async function createHostedPayment({email,name,campaignId,amountNgn}){
-  const amount=Math.round(Number(amountNgn)); if(!Number.isFinite(amount)||amount<1) throw new Error('Invalid payment amount.');
-  const tx_ref=ref();
-  const redirectBase=process.env.KIVORA_PAYMENT_REDIRECT_URL||process.env.VERCEL_URL&&`https://${process.env.VERCEL_URL}`||'http://localhost:5173';
-  const redirect_url=`${redirectBase.replace(/\/$/,'')}/?payment=campaign&campaignId=${encodeURIComponent(campaignId)}`;
-  const response=await fetch(`${BASE}/payments`,{method:'POST',headers:{Authorization:`Bearer ${secret()}`,'Content-Type':'application/json',accept:'application/json'},body:JSON.stringify({tx_ref,amount,currency:'NGN',redirect_url,customer:{email,name:name||email},customizations:{title:'Kivora sponsored Short',description:`Kivora campaign ${campaignId}`},meta:{product:'kivora',campaignId}})});
-  const data=await response.json(); if(!response.ok||data?.status!=='success'||!data?.data?.link) throw new Error(data?.message||'Flutterwave could not create the checkout.');
-  return {tx_ref,link:data.data.link};
+function credentials() {
+  const clientId = process.env.FLW_CLIENT_ID;
+  const clientSecret = process.env.FLW_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    throw new Error('FLW_CLIENT_ID and FLW_CLIENT_SECRET must be configured for Flutterwave v4.');
+  }
+  return { clientId, clientSecret };
 }
 
-export async function verifyHostedPayment({transactionId,expectedReference,expectedAmount,expectedCurrency='NGN'}){
-  const id=encodeURIComponent(String(transactionId));
-  const response=await fetch(`${BASE}/transactions/${id}/verify`,{headers:{Authorization:`Bearer ${secret()}`,accept:'application/json'}});
-  const data=await response.json(); if(!response.ok||data?.status!=='success') return {success:false,status:data?.message||'verification_failed'};
-  const d=data.data||{};
-  const success=d.status==='successful'&&String(d.tx_ref||'')===String(expectedReference||'')&&String(d.currency||'')===expectedCurrency&&Number(d.amount||0)>=Number(expectedAmount||0);
-  return {success,status:d.status,amount:Number(d.amount||0),currency:d.currency,tx_ref:d.tx_ref};
+async function accessToken() {
+  if (cachedToken && Date.now() < tokenExpiresAt - 60_000) return cachedToken;
+  const { clientId, clientSecret } = credentials();
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: clientId,
+    client_secret: clientSecret
+  });
+  const response = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.access_token) {
+    console.error('Flutterwave v4 token request failed:', response.status, data?.error || data?.message || '');
+    throw new Error('Could not authenticate with Flutterwave v4. Check the v4 Client ID and Client Secret.');
+  }
+  cachedToken = data.access_token;
+  tokenExpiresAt = Date.now() + Math.max(60, Number(data.expires_in || 300)) * 1000;
+  return cachedToken;
+}
+
+async function apiRequest(path, options = {}) {
+  const token = await accessToken();
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      ...(options.headers || {})
+    }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    console.error('Flutterwave v4 API request failed:', response.status, data?.message || data?.error || '');
+    throw new Error(data?.message || data?.error || 'Flutterwave v4 request failed.');
+  }
+  return data;
+}
+
+function ref() {
+  return `KIVORA-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    .replace(/[^A-Za-z0-9-]/g, '').slice(0, 42);
+}
+
+export function shouldBypassBilling(authenticatedEmail) {
+  return isKivoraOwnerEmail(authenticatedEmail);
+}
+
+export async function createHostedPayment({ email, name, campaignId, amountNgn }) {
+  const amount = Math.round(Number(amountNgn));
+  if (!Number.isFinite(amount) || amount < 1) throw new Error('Invalid payment amount.');
+  const tx_ref = ref();
+  const configuredRedirect = process.env.KIVORA_PAYMENT_REDIRECT_URL;
+  const host = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:5173';
+  const redirect_url = `${(configuredRedirect || host).replace(/\/$/, '')}/?payment=campaign&campaignId=${encodeURIComponent(campaignId)}`;
+
+  // Flutterwave v4 payment creation. Store tx_ref on the campaign and verify it server-side.
+  const data = await apiRequest('/payments', {
+    method: 'POST',
+    body: JSON.stringify({
+      tx_ref,
+      amount: String(amount),
+      currency: 'NGN',
+      redirect_url,
+      customer: { email, name: name || email },
+      customizations: {
+        title: 'Kivora sponsored Short',
+        description: `Kivora campaign ${campaignId}`
+      },
+      meta: { product: 'kivora', campaignId }
+    })
+  });
+  const paymentData = data?.data || data;
+  const link = paymentData?.link || paymentData?.checkout_url || paymentData?.payment_link;
+  if (!link) throw new Error('Flutterwave v4 did not return a hosted checkout URL.');
+  return { tx_ref, link };
+}
+
+export async function verifyHostedPayment({ transactionId, expectedReference, expectedAmount, expectedCurrency = 'NGN' }) {
+  const id = encodeURIComponent(String(transactionId));
+  let data;
+  try {
+    data = await apiRequest(`/transactions/${id}/verify`, { method: 'GET' });
+  } catch (error) {
+    return { success: false, status: error?.message || 'verification_failed' };
+  }
+  const d = data?.data || data;
+  const status = String(d?.status || '').toLowerCase();
+  const reference = String(d?.tx_ref || d?.reference || '');
+  const currency = String(d?.currency || '');
+  const amount = Number(d?.amount || 0);
+  const success = ['successful', 'succeeded', 'completed'].includes(status) &&
+    reference === String(expectedReference || '') &&
+    currency === expectedCurrency &&
+    amount === Number(expectedAmount || 0);
+  return { success, status, amount, currency, tx_ref: reference };
 }
