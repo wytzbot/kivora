@@ -1,7 +1,7 @@
 import { adminDb, requireUser } from '../functions/server-auth.js';
 import { calculateBillForUser, validatePromotion, MAX_TARGET_IMPRESSIONS, IMPRESSION_BLOCK_SIZE, MIN_TARGET_IMPRESSIONS, USD_TO_NGN_RATE } from '../functions/ad-engine.js';
 import { validateAsset } from '../functions/moderation.js';
-import { createHostedPayment } from '../functions/flutterwave.js';
+import { createHostedPayment, verifyHostedPayment } from '../functions/flutterwave.js';
 import { randomUUID } from 'node:crypto';
 
 const YOUTUBE_ID=/^[A-Za-z0-9_-]{6,}$/;
@@ -36,6 +36,34 @@ async function verifyAsset(assetId){
   throw new Error('Video must already be published on YouTube. Paste a valid YouTube Shorts/video URL or ID.');
 }
 
+// Icon is either a small uploaded image (data URL, resized client-side) or an https URL.
+function cleanIcon(value){
+  const v=String(value||'').trim();
+  if(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(v)&&v.length<=60000) return v;
+  if(/^https:\/\//i.test(v)&&v.length<=500) return v;
+  return '';
+}
+
+async function cancelCampaign(req,res){
+  const user=await requireUser(req); const id=String((req.body||{}).campaignId||'').trim();
+  if(!id) throw new Error('campaignId is required.');
+  const db=adminDb(); const ref=db.collection('campaigns').doc(id);
+  const result=await db.runTransaction(async tx=>{
+    const snap=await tx.get(ref);
+    if(!snap.exists) return {code:404,error:'Campaign not found.'};
+    const c=snap.data()||{};
+    if(c.advertiserId!==user.uid) return {code:403,error:'Campaign access denied.'};
+    if(c.status==='cancelled') return {code:200,already:true};
+    if(c.status==='completed') return {code:409,error:'This campaign has already completed.'};
+    const now=new Date().toISOString();
+    // Delivery, the feed query and the impression endpoint all require status "ready", so this stops serving immediately.
+    tx.update(ref,{status:'cancelled',cancelledAt:now,cancelledBy:user.uid,statusBeforeCancel:c.status||'',updatedAt:now});
+    return {code:200,already:false};
+  });
+  if(result.code!==200) return res.status(result.code).json({error:result.error});
+  return res.status(200).json({cancelled:true,campaignId:id,alreadyCancelled:!!result.already});
+}
+
 async function createCampaign(req,res){
   const user=await requireUser(req); const b=req.body||{};
   const promotionType=b.promotionType==='app'?'app':'short';
@@ -53,9 +81,9 @@ async function createCampaign(req,res){
   const asset=await verifyAsset(b.assetId);
   const bill=calculateBillForUser({targetImpressions:target,authenticatedEmail:user.email,format:'video'});
   const id=randomUUID();
-  const end=new Date(`${startDate}T00:00:00`); end.setDate(end.getDate()+duration-1);
+  const end=new Date(`${startDate}T00:00:00Z`); end.setUTCDate(end.getUTCDate()+duration-1);
   const campaign={
-    advertiserId:user.uid,advertiserEmail:user.email||'',promotionType,targetCategories:Array.isArray(b.categories)?[...new Set(b.categories.map(x=>String(x).toLowerCase()).filter(x=>['all','comedy','tech','adventure','science','finance','education','gaming','sports','food','music','beauty','new'].includes(x)))].slice(0,13):['all'],targetLocation:['all','country','city'].includes(String(b.targetLocation||'all'))?String(b.targetLocation||'all'):'all',targetRegion:String(b.targetLocationValue||b.country||'').trim().slice(0,100),format:'video',brand:String(b.brand).trim().slice(0,120),title:String(b.title).trim().slice(0,160),description:String(b.description||'').trim().slice(0,500),country:String(b.country||'NG').trim().slice(0,10),assetId:asset.assetId,assetSource:asset.source,durationSeconds:asset.durationSeconds||null,embedWidth:asset.embedWidth||null,embedHeight:asset.embedHeight||null,publishedAt:asset.publishedAt||null,site:promotionType==='app'?String(b.site).trim():null,destinationName:promotionType==='app'?String(b.destinationName).trim().slice(0,80):null,siteIcon:promotionType==='app'?String(b.siteIcon||'').trim().slice(0,500):null,targetImpressions:target,billableImpressions:bill.billableImpressions,totalBudgetUsd:bill.total,totalBudgetNgn:bill.totalNgn,currency:'NGN',usdNgnRate:USD_TO_NGN_RATE,durationDays:duration,startDate,endDate:end.toISOString().slice(0,10),qualifiedImpressions:0,impressions:0,clicks:0,spend:0,status:bill.ownerBillingBypass?'ready':'pending_payment',paymentStatus:bill.ownerBillingBypass?'verified':'pending',moderationStatus:'approved',assetStatus:'verified',preflightStatus:'passed',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()
+    advertiserId:user.uid,advertiserEmail:user.email||'',promotionType,targetCategories:Array.isArray(b.categories)?[...new Set(b.categories.map(x=>String(x).toLowerCase()).filter(x=>['all','comedy','tech','adventure','science','finance','education','gaming','sports','food','music','beauty','new'].includes(x)))].slice(0,13):['all'],targetLocation:['all','country','city'].includes(String(b.targetLocation||'all'))?String(b.targetLocation||'all'):'all',targetRegion:String(b.targetLocationValue||b.country||'').trim().slice(0,100),format:'video',brand:String(b.brand).trim().slice(0,120),title:String(b.title).trim().slice(0,160),description:String(b.description||'').trim().slice(0,500),country:String(b.country||'NG').trim().slice(0,10),assetId:asset.assetId,assetSource:asset.source,durationSeconds:asset.durationSeconds||null,embedWidth:asset.embedWidth||null,embedHeight:asset.embedHeight||null,publishedAt:asset.publishedAt||null,site:promotionType==='app'?String(b.site).trim():null,destinationName:promotionType==='app'?String(b.destinationName).trim().slice(0,80):null,siteIcon:promotionType==='app'?cleanIcon(b.siteIcon):null,targetImpressions:target,billableImpressions:bill.billableImpressions,totalBudgetUsd:bill.total,totalBudgetNgn:bill.totalNgn,currency:'NGN',usdNgnRate:USD_TO_NGN_RATE,durationDays:duration,startDate,endDate:end.toISOString().slice(0,10),qualifiedImpressions:0,impressions:0,clicks:0,spend:0,status:bill.ownerBillingBypass?'ready':'pending_payment',paymentStatus:bill.ownerBillingBypass?'verified':'pending',moderationStatus:'approved',assetStatus:'verified',preflightStatus:'passed',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()
   };
   const db=adminDb(); await db.collection('campaigns').doc(id).set(campaign);
   if(bill.ownerBillingBypass) return res.status(200).json({campaignId:id,paymentRequired:false,campaign});
@@ -70,6 +98,7 @@ async function verifyPayment(req,res){
   const db=adminDb(); const ref=db.collection('campaigns').doc(id); const snap=await ref.get();
   if(!snap.exists) return res.status(404).json({error:'Campaign not found.'});
   const campaign=snap.data()||{}; if(campaign.advertiserId!==user.uid) return res.status(403).json({error:'Campaign access denied.'});
+  if(campaign.status==='cancelled') return res.status(409).json({error:'This campaign was cancelled.'});
   const verification=await verifyHostedPayment({transactionId,expectedReference:campaign.paymentReference,expectedAmount:campaign.totalBudgetNgn,expectedCurrency:'NGN'});
   if(!verification.success) return res.status(402).json({error:'Payment is not verified yet.',status:verification.status||'pending'});
   await ref.update({paymentStatus:'verified',status:'ready',paymentTransactionId:transactionId,paidAmount:verification.amount,updatedAt:new Date().toISOString()});
@@ -79,4 +108,4 @@ async function verifyPayment(req,res){
 export default async function handler(req,res){
   res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('Access-Control-Allow-Methods','GET,POST,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');
   if(req.method==='OPTIONS') return res.status(204).end();
-res.setHeader('Content-Type','application/json; charset=utf-8');try{if(req.method!=='POST')return res.status(405).json({error:'Method not allowed.'});if(req.query?.action==='verify')return await verifyPayment(req,res);return await createCampaign(req,res)}catch(e){return res.status(e?.statusCode||400).json({error:e?.message||'Campaign request failed.'})}}
+res.setHeader('Content-Type','application/json; charset=utf-8');try{if(req.method!=='POST')return res.status(405).json({error:'Method not allowed.'});if(req.query?.action==='verify')return await verifyPayment(req,res);if(req.query?.action==='cancel')return await cancelCampaign(req,res);return await createCampaign(req,res)}catch(e){return res.status(e?.statusCode||400).json({error:e?.message||'Campaign request failed.'})}}

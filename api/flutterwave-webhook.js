@@ -40,6 +40,9 @@ export default async function handler(req, res) {
 
     const campaignDoc = matches.docs[0];
     const campaign = campaignDoc.data() || {};
+    if (campaign.status === 'cancelled') {
+      return res.status(200).json({ received: true, ignored: true, cancelled: true });
+    }
     if (campaign.paymentStatus === 'verified' && campaign.paymentTransactionId) {
       return res.status(200).json({ received: true, alreadyProcessed: true });
     }

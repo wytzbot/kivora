@@ -169,3 +169,24 @@ export async function saveVideo(videoId,uid){
     throw e;
   }
 }
+
+// POST/GET to a Kivora API route with a fresh Firebase ID token.
+// If the server answers 401 (stale/expired token) the token is force-refreshed and the call retried once,
+// so the user never has to sign out and back in just to reach payment.
+export async function authedFetch(url,options={}){
+  const user=auth.currentUser;
+  if(!user||user.isAnonymous) throw Object.assign(new Error("Connect Google before continuing."),{code:"auth/not-signed-in"});
+  const send=async force=>{
+    const token=await user.getIdToken(force);
+    return fetch(url,{...options,headers:{...(options.headers||{}),Authorization:`Bearer ${token}`}});
+  };
+  let res=await send(false);
+  if(res.status===401){
+    try{res=await send(true)}catch{}
+  }
+  if(res.status===401){
+    // Refresh did not help: the session itself is gone. Reload the user once and retry.
+    try{await user.reload();res=await send(true)}catch{}
+  }
+  return res;
+}

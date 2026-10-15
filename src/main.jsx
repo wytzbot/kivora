@@ -4,7 +4,7 @@ import "./styles.css";
 import { isLikelySpam, effectiveOriginality, canRecommend, isEligibleShort } from "./videoDiscovery";
 import {
  auth,db,signInWithGoogle,finishGoogleRedirect,onAuthStateChanged,
- logOut,getProEntitlement,getYouTubeAccessToken
+ logOut,getProEntitlement,getYouTubeAccessToken,authedFetch
 } from "./firebase";
 import {doc,getDoc,setDoc,serverTimestamp,runTransaction,collection,getDocs,query as fsQuery,limit,where} from "firebase/firestore";
 import { isKivoraOwner } from "./access.js";
@@ -132,6 +132,7 @@ function App(){
  const [audioConsent]=useState(()=>localStorage.getItem("kivora-audio-consent")==="granted");
  const [ratings,setRatings]=useState({}),[query,setQuery]=useState(""),[category,setCategory]=useState("all"),[videos,setVideos]=useState(EMPTY_VIDEOS),[pageTokens,setPageTokens]=useState([]),[hasMore,setHasMore]=useState(true),[loadingMore,setLoadingMore]=useState(false),[sponsored,setSponsored]=useState([]),[videoLoading,setVideoLoading]=useState(true),[videoError,setVideoError]=useState(""),[theme,setTheme]=useState(()=>localStorage.getItem("kivora-theme")||"system"),[installPrompt,setInstallPrompt]=useState(null),[selectedVideo,setSelectedVideo]=useState(null);
  const [authReady,setAuthReady]=useState(false),[categoryMenuOpen,setCategoryMenuOpen]=useState(false),[searchOpen,setSearchOpen]=useState(false),[shuffleOrder,setShuffleOrder]=useState([]);
+ const [barHidden,setBarHidden]=useState(false);
  const feedSentinelRef=useRef(null),feedCacheRef=useRef({}),feedRequestRef=useRef(0),seenRef=useRef(null),orderRef=useRef({rank:new Map(),batch:0}),autoMoreRef=useRef(0);
  if(!seenRef.current)seenRef.current=readSeen();
  const signedIn=!!user&&!user.isAnonymous;
@@ -149,9 +150,14 @@ function App(){
      try{
        const u=auth.currentUser;
        if(!u||u.isAnonymous)return;
-       const token=await u.getIdToken();
-       const r=await fetch(apiUrl("/api/ad-campaign?action=verify"),{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${token}`},body:JSON.stringify({campaignId,transactionId})});
-       const d=await r.json();
+       let r,d={};
+       for(let attempt=0;attempt<4&&!cancelled;attempt++){
+         r=await authedFetch(apiUrl("/api/ad-campaign?action=verify"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({campaignId,transactionId})});
+         d=await r.json().catch(()=>({}));
+         if(r.ok&&d.verified)break;
+         if(r.status!==402)break;
+         await new Promise(res=>setTimeout(res,2500));
+       }
        if(cancelled)return;
        setNotice(r.ok&&d.verified?"Payment verified. Your sponsored Short is now ready for delivery.":(d.error||"Payment is still pending."));
        window.history.replaceState({},"",window.location.pathname);
@@ -181,6 +187,21 @@ function App(){
    const off=onAuthStateChanged(auth,u=>{setUser(u);setAuthReady(true)});
    finishGoogleRedirect().then(r=>r?.user&&setNotice("Google sign-in complete.")).catch(e=>setNotice(authMessage(e)));
    return off;
+ },[]);
+ // Feed top bar: hide while swiping up to the next Short, reveal again when swiping back down.
+ useEffect(()=>{
+   const last=new WeakMap();
+   const onScroll=e=>{
+     const el=e.target;
+     if(!el||!el.classList||!el.classList.contains("feed"))return;
+     const y=el.scrollTop,prev=last.get(el)??y,dy=y-prev;
+     if(y<8){setBarHidden(false);last.set(el,y);return}
+     if(Math.abs(dy)<6)return;
+     last.set(el,y);
+     setBarHidden(dy>0);
+   };
+   document.addEventListener("scroll",onScroll,true);
+   return()=>document.removeEventListener("scroll",onScroll,true);
  },[]);
  useEffect(()=>{ if(notice){const t=setTimeout(()=>setNotice(""),4200);return()=>clearTimeout(t)} },[notice]);
  useEffect(()=>{const onSeen=e=>{const id=String(e?.detail||"");if(id)seenRef.current.add(id)};window.addEventListener("kivora:seen",onSeen);return()=>window.removeEventListener("kivora:seen",onSeen)},[]);
@@ -386,7 +407,7 @@ function App(){
   return <div className="authGate"><div className="authGlow"/><section className="authCard"><div className="authBrandMark">K</div><p className="authEyebrow">YOUR DAILY SHORTS FEED</p><h1>Less searching.<br/><span>More watching.</span></h1><p className="authCopy">A clean, fast stream of Shorts picked by category and ready when you are.</p><button className="googleLoginButton" onClick={google} disabled={busy||!authReady}><span className="googleG">G</span>{busy?"Connecting…":"Continue with Google"}<span className="googleArrow">→</span></button><small className="authFootnote">{!authReady?"Preparing secure sign-in…":"Choose your Google account to continue"}</small><div className="authPrivacy">By continuing, you agree to our <button onClick={()=>{window.location.hash="#terms"}}>Terms</button> and <button onClick={()=>{window.location.hash="#privacy"}}>Privacy Policy</button>.</div></section></div>;
  }
  return <div className="app">
-  <header className="topbar">
+  <header className={`topbar${barHidden&&!menu&&!categoryMenuOpen&&!searchOpen?" topbarHidden":""}`}>
    <button className="brand" onClick={()=>go("home")}><span className="brandGlyph"><BrandMark/></span><span>Kivora</span></button>
    <div className="topActions">
     <div className="categoryDropdown"><button className={`categoryTrigger ${categoryMenuOpen?"active":""}`} onClick={()=>setCategoryMenuOpen(v=>!v)} aria-expanded={categoryMenuOpen}><span className="categoryTriggerIcon"><Icon name="grid"/></span><span>CATEGORIES</span><span className="categoryCurrent">{categories.find(c=>c[0]===category)?.[1]||"For You"}</span><span className="categoryChevron"><Icon name="chevronDown" size={16}/></span></button>{categoryMenuOpen&&<div className="categoryMenu" role="listbox" aria-label="Choose a video category">{categories.map(([key,label])=><button key={key} role="option" aria-selected={category===key} className={category===key?"selected":""} onClick={()=>{setCategory(key);setQuery("");setShuffleOrder([]);setSearchOpen(false);setCategoryMenuOpen(false);go("home",{history:false});requestAnimationFrame(()=>document.querySelector(".feed")?.scrollTo({top:0,behavior:"auto"}))}}>{label}{category===key&&<span>✓</span>}</button>)}</div>}</div>
@@ -850,9 +871,68 @@ function Premium({user,onNotice,owner=false}){
 
 function AdStudio({user,owner=false}){
  const [step,setStep]=useState("prep"),[status,setStatus]=useState(""),[submitting,setSubmitting]=useState(false),[campaignId,setCampaignId]=useState(""),[myCampaigns,setMyCampaigns]=useState([]),[loadingCampaigns,setLoadingCampaigns]=useState(false);
- const today=new Date().toISOString().slice(0,10);
+ const today=(()=>{const n=new Date();return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}-${String(n.getDate()).padStart(2,"0")}`})();
  const [form,setForm]=useState({promotionType:"short",brand:"",title:"",description:"",assetId:"",site:"",destinationName:"",siteIcon:"",country:"",categories:["all"],targetLocation:"all",targetImpressions:"3000",duration:"1",startDate:today});
  const update=(k,v)=>setForm(x=>({...x,[k]:v}));
+ // Keep the in-progress ad form in localStorage so advertisers can leave and continue later.
+ const draftKey=`kivora-ad-draft-${user?.uid||"anon"}`;
+ const [draftLoaded,setDraftLoaded]=useState(false),[draftRestored,setDraftRestored]=useState(false);
+ useEffect(()=>{
+  setDraftLoaded(false);
+  try{
+   const saved=JSON.parse(localStorage.getItem(draftKey)||"null");
+   if(saved&&saved.form){
+    const f={...saved.form};
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(f.startDate||"")||f.startDate<today)f.startDate=today;
+    setForm(x=>({...x,...f}));
+    setStep(saved.step==="form"||saved.step==="review"?saved.step:"prep");
+    setDraftRestored(true);
+   }
+  }catch{}
+  setDraftLoaded(true);
+ },[draftKey]);
+ useEffect(()=>{
+  if(!draftLoaded)return;
+  const t=setTimeout(()=>{try{
+   const touched=["brand","title","description","assetId","site","destinationName","siteIcon"].some(k=>String(form[k]||"").trim());
+   if(touched)localStorage.setItem(draftKey,JSON.stringify({form,step:step==="prep"?"prep":step,savedAt:Date.now()}));
+  }catch{}},350);
+  return()=>clearTimeout(t);
+ },[form,step,draftLoaded,draftKey]);
+ function clearDraft(){try{localStorage.removeItem(draftKey)}catch{};setDraftRestored(false)}
+ function resetDraft(){clearDraft();setForm({promotionType:"short",brand:"",title:"",description:"",assetId:"",site:"",destinationName:"",siteIcon:"",country:"",categories:["all"],targetLocation:"all",targetImpressions:"3000",duration:"1",startDate:today});setStep("form");setStatus("")}
+ async function pickIcon(e){
+  const file=e.target.files?.[0];e.target.value="";
+  if(!file)return;
+  if(!/^image\/(png|jpeg|webp|gif)$/.test(file.type)){setStatus("Choose a PNG, JPG or WebP image for the app icon.");return}
+  if(file.size>8*1024*1024){setStatus("That image is too large. Choose one under 8 MB.");return}
+  try{
+   const url=URL.createObjectURL(file);
+   const img=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=url});
+   const size=128,canvas=document.createElement("canvas");canvas.width=canvas.height=size;
+   const ctx=canvas.getContext("2d");
+   const side=Math.min(img.naturalWidth,img.naturalHeight),sx=(img.naturalWidth-side)/2,sy=(img.naturalHeight-side)/2;
+   ctx.drawImage(img,sx,sy,side,side,0,0,size,size);URL.revokeObjectURL(url);
+   let data=canvas.toDataURL("image/webp",0.85);
+   if(!data.startsWith("data:image/webp"))data=canvas.toDataURL("image/png");
+   if(data.length>55000)data=canvas.toDataURL("image/jpeg",0.8);
+   update("siteIcon",data);setStatus("");
+  }catch{setStatus("That image could not be read. Try another one.")}
+ }
+ async function cancelCampaign(id){
+  if(!id)return;
+  if(!window.confirm("Cancel this campaign now? Delivery stops immediately. Impressions already delivered are not refunded automatically."))return;
+  setStatus("Cancelling campaign…");
+  try{
+   const r=await authedFetch(apiUrl("/api/ad-campaign?action=cancel"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({campaignId:id})});
+   const d=await r.json().catch(()=>({}));
+   if(!r.ok)throw new Error(d.error||"Campaign could not be cancelled.");
+   setMyCampaigns(list=>list.map(c=>c.id===id?{...c,status:"cancelled"}:c));
+   if(id===campaignId)setCampaignId("");
+   setStatus("Campaign cancelled. Delivery has stopped.");
+   refreshCampaigns();
+  }catch(e){setStatus(e?.message||"Campaign could not be cancelled.")}
+ }
  const IMPRESSION_BLOCK=3000, MIN_CAMPAIGN_IMPRESSIONS=3000, VIDEO_PRICE_PER_BLOCK=1.00;
  const days=Math.max(1,Math.min(90,Number(form.duration)||1));
  const targetImpressions=Math.max(0,Math.floor(Number(String(form.targetImpressions).replace(/[^0-9]/g,""))||0));
@@ -862,7 +942,7 @@ function AdStudio({user,owner=false}){
  const dailyImpressions=days?Math.ceil(billableImpressions/days):0;
  const dailyBudget=days?Number((estimatedBill/days).toFixed(2)):0;
  const startDate=form.startDate||today;
- const endDate=(()=>{const d=new Date(`${startDate}T00:00:00`);if(Number.isNaN(d.getTime()))return startDate;d.setDate(d.getDate()+days-1);return d.toISOString().slice(0,10)})();
+ const endDate=(()=>{const d=new Date(`${startDate}T00:00:00Z`);if(Number.isNaN(d.getTime()))return startDate;d.setUTCDate(d.getUTCDate()+days-1);return d.toISOString().slice(0,10)})();
  const destinationRequired=form.promotionType==="app";
  async function refreshCampaigns(){
   if(!user||user.isAnonymous)return;
@@ -893,9 +973,9 @@ function AdStudio({user,owner=false}){
   setStatus(`Preflight passed. ${owner?"Owner billing bypass applies. No payment is required.":"Estimated bill: "+moneyUsdNgn(estimatedBill)+" for "+billableImpressions.toLocaleString()+" qualified video impressions ("+billableBlocks+" × 3,000 at "+moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)+")."} Pacing target: about ${dailyImpressions.toLocaleString()} qualified impressions/day and ${moneyUsdNgn(dailyBudget)}/day.`);
   setStep("review");setSubmitting(false);
  }
- if(step==="prep")return <section className="panel"><h1>Advertise with Kivora</h1><p>Kivora uses a video-only Shorts advertising system. Choose whether you are simply promoting a Short or sending viewers to an app/site.</p><div className="steps"><div><b>1. Publish first</b> — upload your video to YouTube, set its visibility so it can be embedded, and copy the public YouTube Shorts/video URL. Kivora never accepts an uploaded video file.</div><div><b>2. Choose your promotion</b> — promote the Short alone, or promote an app/site with an HTTPS destination URL and a name/logo banner beneath the video.</div><div><b>3. Review and pay</b> — Kivora verifies the YouTube video, vertical/square format, duration and embed permission before checkout. Payment is confirmed on the server before delivery.</div><div><b>4. Track delivery</b> — qualified impressions are counted server-side after at least 2 seconds with 50%+ visibility. Clicks, spend and pacing are tracked separately from YouTube engagement.</div><div><b>Important</b> — this is Kivora placement, not a YouTube Ads campaign or a guarantee of views. YouTube controls the player, availability, and its own engagement counts.</div></div><div className="priceBox"><b>{moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)} / up to 3,000 qualified impressions</b><span>Minimum campaign: 3,000 qualified impressions. Pricing: $1 (₦1,300) per 3,000 target impressions; larger targets are billed in 3,000-impression blocks. Actual delivery depends on eligible viewers and placement availability.</span><span>One qualified impression requires at least 2 seconds at 50%+ visibility.</span></div><button className="primary" onClick={()=>setStep("form")}>Create video campaign</button><div className="campaignList"><div className="relatedHeading"><div><small>MY CAMPAIGNS</small><h2>Expense monitor</h2></div><button onClick={refreshCampaigns} disabled={loadingCampaigns}>{loadingCampaigns?"Refreshing…":"Refresh"}</button></div>{!myCampaigns.length?<p className="tiny">No campaigns yet. Completed campaigns will show spend, delivery and pacing here.</p>:myCampaigns.map(c=>{const target=Number(c.targetImpressions||0),delivered=Number(c.qualifiedImpressions||c.impressions||0),spend=Number(c.spend||0),remaining=Math.max(0,target-delivered);const days=Math.max(1,Number(c.durationDays||1));const daily=target?Math.ceil(target/days):0;return <div className="campaignRow" key={c.id}><div><b>{c.title||"Untitled campaign"}</b><span className={remaining===0?"campaignComplete":"campaignStatus"}>{remaining===0?"✓ Completed":(c.status||"In review")} · {c.startDate} → {c.endDate}</span></div><div><b>{delivered.toLocaleString()} / {target.toLocaleString()}</b><span>{moneyUsdNgn(spend)} spent · {moneyUsdNgn(Math.max(0,Number(c.totalBudgetUsd||0)-spend))} remaining · {Number(c.clicks||0).toLocaleString()} destination clicks</span></div><div><b>{remaining.toLocaleString()}</b><span>impressions remaining · ~{daily.toLocaleString()}/day planned</span></div></div>})}</div></section>;
- if(step==="review")return <section className="panel"><button onClick={()=>setStep("form")}>← Edit campaign</button><h1>Campaign & expense monitor</h1><div className="campaignMonitor"><div><small>TOTAL BUDGET</small><b>{moneyUsdNgn(estimatedBill)}</b></div><div><small>SPENT NOW</small><b>{moneyUsdNgn(0)}</b></div><div><small>REMAINING</small><b>{moneyUsdNgn(estimatedBill)}</b></div><div><small>DAILY PLAN</small><b>{moneyUsdNgn(dailyBudget)}</b></div><div><small>IMPRESSIONS/DAY</small><b>{dailyImpressions.toLocaleString()}</b></div><div><small>CAMPAIGN DAYS</small><b>{days}</b></div></div><div className="priceBox"><b>{form.promotionType==="app"?"App/site promotion":"Short promotion"}</b><span>Delivery: {startDate} → {endDate} ({days} day{days===1?"":"s"})</span><span>Target: {targetImpressions.toLocaleString()} qualified impressions</span><span>Billable: {billableImpressions.toLocaleString()} impressions</span><span>Rate: {moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)} per 3,000-impression block</span><span>Planned spend/day: {moneyUsdNgn(dailyBudget)}</span><small>Spend is derived from qualified delivery, capped at the campaign target. The monitor separates delivered spend from the remaining budget.</small></div><button className="primary" disabled={submitting} onClick={async()=>{if(submitting)return;setSubmitting(true);setStatus("");try{const u=auth.currentUser;if(!u||u.isAnonymous)throw new Error("Connect Google before creating an advertising campaign.");const token=await u.getIdToken();const r=await fetch(apiUrl("/api/ad-campaign"),{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${token}`},body:JSON.stringify({...form,durationDays:days})});const d=await r.json();if(!r.ok)throw new Error(d.error||"Campaign could not be created.");setCampaignId(d.campaignId||"");if(d.paymentRequired&&d.paymentLink){setStatus("Secure Flutterwave checkout is opening…");openExternal(d.paymentLink);return;}setStatus("Campaign created and ready for delivery.");}catch(e){setStatus(e?.message||"Campaign could not be created.")}finally{setSubmitting(false)}}}>{submitting?"Preparing…":"Continue to secure payment"}</button>{status&&<div className="status">{status}</div>}</section>;
- return <section className="panel"><button onClick={()=>setStep("prep")}>← Back</button><h1>Video campaign</h1><form onSubmit={submit}><label>Promotion type<select value={form.promotionType} onChange={e=>update("promotionType",e.target.value)}><option value="short">Promote my Short</option><option value="app">Promote an app or site</option></select></label>{[["assetId","YouTube Shorts/video URL (already published)"],["brand","Brand / creator name"],["title","Campaign title"],["description","Description"],["targetImpressions","Target qualified impressions"],["duration","Campaign duration (days)"],["startDate","Start date"]].map(([k,l])=><label key={k}>{l}<input value={form[k]} onChange={e=>update(k,e.target.value)} type={k==="duration"||k==="targetImpressions"?"number":k==="startDate"?"date":"text"} min={k==="duration"?1:k==="targetImpressions"?3000:undefined} max={k==="duration"?90:k==="targetImpressions"?100000000:undefined} required={k!=="country"&&k!=="description"}/></label>)}<fieldset className="adCategoryPicker"><legend>Target viewer categories</legend><p className="tiny">Your sponsored Short is prioritized for viewers watching these categories. If delivery is slow, it may also appear in other categories to help complete your impression target.</p><div className="adCategoryGrid">{[["all","All categories"],["comedy","Comedy"],["tech","Tech"],["adventure","Adventure"],["science","Science"],["finance","Finance"],["education","Education"],["gaming","Gaming"],["sports","Sports"],["food","Food"],["music","Music"],["beauty","Beauty"],["new","Latest"]].map(([value,label])=><label key={value}><input type="checkbox" checked={(form.categories||["all"]).includes(value)} onChange={e=>{const old=form.categories||["all"];const next=e.target.checked?(value==="all"?["all"]:[...old.filter(x=>x!=="all"),value]):old.filter(x=>x!==value);update("categories",next.length?next:["all"]);}}/>{label}</label>)}</div></fieldset>{destinationRequired&&<div className="destinationFields"><label>App/site name shown on banner<input value={form.destinationName} onChange={e=>update("destinationName",e.target.value)} placeholder="e.g. Kivora" required/></label><label>Destination URL<input value={form.site} onChange={e=>update("site",e.target.value)} placeholder="https://example.com" inputMode="url" required/></label><label>App icon URL <span className="tiny">optional — site favicon is used if blank</span><input value={form.siteIcon} onChange={e=>update("siteIcon",e.target.value)} placeholder="https://example.com/icon.png" inputMode="url"/></label><div className="destinationPreview"><span>LINK PREVIEW</span><div><span className="destinationIcon">◆</span><strong>{form.destinationName||"Your app/site"}</strong><small>{form.site||"https://example.com"}</small><b>Open ↗</b></div></div></div>}<div className="priceBox"><span>Rate <b>{owner?"$0.00 (₦0) — owner billing bypass":moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)+" / up to 3,000 qualified impressions"}</b></span><span>Billable target <b>{billableImpressions.toLocaleString()}</b></span><span>Estimated bill <b>{moneyUsdNgn(estimatedBill)}</b></span><span>Daily pacing <b>{dailyImpressions.toLocaleString()} impressions/day · {moneyUsdNgn(dailyBudget)}/day</b></span><span>Delivery window <b>{startDate} → {endDate}</b></span><small>{destinationRequired?"The app/site banner will appear directly beneath the sponsored video and link to the supplied destination.":"No destination link is required for Short-only promotion."}</small></div><button className="primary" disabled={submitting}>{submitting?"Checking…":"Review campaign & expenses"}</button></form>{status&&<div className="status">{status}</div>}</section>
+ if(step==="prep")return <section className="panel"><h1>Advertise with Kivora</h1><p>Kivora uses a video-only Shorts advertising system. Choose whether you are simply promoting a Short or sending viewers to an app/site.</p><div className="steps"><div><b>1. Publish first</b> — upload your video to YouTube, set its visibility so it can be embedded, and copy the public YouTube Shorts/video URL. Kivora never accepts an uploaded video file.</div><div><b>2. Choose your promotion</b> — promote the Short alone, or promote an app/site with an HTTPS destination URL and a name/logo banner beneath the video.</div><div><b>3. Review and pay</b> — Kivora verifies the YouTube video, vertical/square format, duration and embed permission before checkout. Payment is confirmed on the server before delivery.</div><div><b>4. Track delivery</b> — qualified impressions are counted server-side after at least 2 seconds with 50%+ visibility. Clicks, spend and pacing are tracked separately from YouTube engagement.</div><div><b>Important</b> — this is Kivora placement, not a YouTube Ads campaign or a guarantee of views. YouTube controls the player, availability, and its own engagement counts.</div></div><div className="priceBox"><b>{moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)} / up to 3,000 qualified impressions</b><span>Minimum campaign: 3,000 qualified impressions. Pricing: $1 (₦1,300) per 3,000 target impressions; larger targets are billed in 3,000-impression blocks. Actual delivery depends on eligible viewers and placement availability.</span><span>One qualified impression requires at least 2 seconds at 50%+ visibility.</span></div><button className="primary" onClick={()=>setStep("form")}>{draftRestored?"Continue your draft campaign":"Create video campaign"}</button><div className="campaignList"><div className="relatedHeading"><div><small>MY CAMPAIGNS</small><h2>Expense monitor</h2></div><button onClick={refreshCampaigns} disabled={loadingCampaigns}>{loadingCampaigns?"Refreshing…":"Refresh"}</button></div>{!myCampaigns.length?<p className="tiny">No campaigns yet. Completed campaigns will show spend, delivery and pacing here.</p>:myCampaigns.map(c=>{const target=Number(c.targetImpressions||0),delivered=Number(c.qualifiedImpressions||c.impressions||0),spend=Number(c.spend||0),remaining=Math.max(0,target-delivered);const days=Math.max(1,Number(c.durationDays||1));const daily=target?Math.ceil(target/days):0;return <div className="campaignRow" key={c.id}><div><b>{c.title||"Untitled campaign"}</b><span className={remaining===0?"campaignComplete":"campaignStatus"}>{remaining===0?"✓ Completed":(c.status||"In review")} · {c.startDate} → {c.endDate}</span></div><div><b>{delivered.toLocaleString()} / {target.toLocaleString()}</b><span>{moneyUsdNgn(spend)} spent · {moneyUsdNgn(Math.max(0,Number(c.totalBudgetUsd||0)-spend))} remaining · {Number(c.clicks||0).toLocaleString()} destination clicks</span></div>{!["cancelled","completed"].includes(c.status)&&remaining>0&&<div><button type="button" className="dangerBtn" onClick={()=>cancelCampaign(c.id)}>Cancel campaign</button></div>}<div><b>{remaining.toLocaleString()}</b><span>impressions remaining · ~{daily.toLocaleString()}/day planned</span></div></div>})}</div></section>;
+ if(step==="review")return <section className="panel"><button onClick={()=>setStep("form")}>← Edit campaign</button><h1>Campaign & expense monitor</h1><div className="campaignMonitor"><div><small>TOTAL BUDGET</small><b>{moneyUsdNgn(estimatedBill)}</b></div><div><small>SPENT NOW</small><b>{moneyUsdNgn(0)}</b></div><div><small>REMAINING</small><b>{moneyUsdNgn(estimatedBill)}</b></div><div><small>DAILY PLAN</small><b>{moneyUsdNgn(dailyBudget)}</b></div><div><small>IMPRESSIONS/DAY</small><b>{dailyImpressions.toLocaleString()}</b></div><div><small>CAMPAIGN DAYS</small><b>{days}</b></div></div><div className="priceBox"><b>{form.promotionType==="app"?"App/site promotion":"Short promotion"}</b><span>Delivery: {startDate} → {endDate} ({days} day{days===1?"":"s"})</span><span>Target: {targetImpressions.toLocaleString()} qualified impressions</span><span>Billable: {billableImpressions.toLocaleString()} impressions</span><span>Rate: {moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)} per 3,000-impression block</span><span>Planned spend/day: {moneyUsdNgn(dailyBudget)}</span><small>Spend is derived from qualified delivery, capped at the campaign target. The monitor separates delivered spend from the remaining budget.</small></div><button className="primary" disabled={submitting} onClick={async()=>{if(submitting)return;setSubmitting(true);setStatus("");try{const u=auth.currentUser;if(!u||u.isAnonymous)throw new Error("Connect Google before creating an advertising campaign.");const r=await authedFetch(apiUrl("/api/ad-campaign"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...form,durationDays:days})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||"Campaign could not be created.");setCampaignId(d.campaignId||"");clearDraft();refreshCampaigns();if(d.paymentRequired&&d.paymentLink){setStatus("Secure Flutterwave checkout is opening…");openExternal(d.paymentLink);return;}setStatus("Campaign created and ready for delivery.");}catch(e){setStatus(e?.message||"Campaign could not be created.")}finally{setSubmitting(false)}}}>{submitting?"Preparing…":campaignId?"Retry secure payment":"Continue to secure payment"}</button>{campaignId&&<button type="button" className="dangerBtn" onClick={()=>cancelCampaign(campaignId)}>Cancel campaign</button>}{status&&<div className="status">{status}</div>}</section>;
+ return <section className="panel"><button onClick={()=>setStep("prep")}>← Back</button><h1>Video campaign</h1>{draftRestored&&<div className="status draftNotice">Continuing from your saved draft. <button type="button" className="searchCancel" onClick={resetDraft}>Start over</button></div>}<form onSubmit={submit}><label>Promotion type<select value={form.promotionType} onChange={e=>update("promotionType",e.target.value)}><option value="short">Promote my Short</option><option value="app">Promote an app or site</option></select></label>{[["assetId","YouTube Shorts/video URL (already published)"],["brand","Brand / creator name"],["title","Campaign title"],["description","Description"],["targetImpressions","Target qualified impressions"],["duration","Campaign duration (days)"],["startDate","Start date"]].map(([k,l])=><label key={k}>{l}<input value={form[k]} onChange={e=>update(k,e.target.value)} type={k==="duration"||k==="targetImpressions"?"number":k==="startDate"?"date":"text"} min={k==="duration"?1:k==="targetImpressions"?3000:undefined} max={k==="duration"?90:k==="targetImpressions"?100000000:undefined} required={k!=="country"&&k!=="description"}/></label>)}<fieldset className="adCategoryPicker"><legend>Target viewer categories</legend><p className="tiny">Your sponsored Short is prioritized for viewers watching these categories. If delivery is slow, it may also appear in other categories to help complete your impression target.</p><div className="adCategoryGrid">{[["all","All categories"],["comedy","Comedy"],["tech","Tech"],["adventure","Adventure"],["science","Science"],["finance","Finance"],["education","Education"],["gaming","Gaming"],["sports","Sports"],["food","Food"],["music","Music"],["beauty","Beauty"],["new","Latest"]].map(([value,label])=><label key={value}><input type="checkbox" checked={(form.categories||["all"]).includes(value)} onChange={e=>{const old=form.categories||["all"];const next=e.target.checked?(value==="all"?["all"]:[...old.filter(x=>x!=="all"),value]):old.filter(x=>x!==value);update("categories",next.length?next:["all"]);}}/>{label}</label>)}</div></fieldset>{destinationRequired&&<div className="destinationFields"><label>App/site name shown on banner<input value={form.destinationName} onChange={e=>update("destinationName",e.target.value)} placeholder="e.g. Kivora" required/></label><label>Destination URL<input value={form.site} onChange={e=>update("site",e.target.value)} placeholder="https://example.com" inputMode="url" required/></label><label>App icon <span className="tiny">optional — pick an image, or the site favicon is used</span><span className="iconPicker"><span className="destinationIcon iconPickerPreview">{form.siteIcon?<img src={form.siteIcon} alt="App icon preview"/>:"◆"}</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={pickIcon}/>{form.siteIcon&&<button type="button" className="searchCancel" onClick={()=>update("siteIcon","")}>Remove</button>}</span></label><div className="destinationPreview"><span>LINK PREVIEW</span><div><span className="destinationIcon">{form.siteIcon?<img src={form.siteIcon} alt=""/>:"◆"}</span><strong>{form.destinationName||"Your app/site"}</strong><small>{form.site||"https://example.com"}</small><b>Open ↗</b></div></div></div>}<div className="priceBox"><span>Rate <b>{owner?"$0.00 (₦0) — owner billing bypass":moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)+" / up to 3,000 qualified impressions"}</b></span><span>Billable target <b>{billableImpressions.toLocaleString()}</b></span><span>Estimated bill <b>{moneyUsdNgn(estimatedBill)}</b></span><span>Daily pacing <b>{dailyImpressions.toLocaleString()} impressions/day · {moneyUsdNgn(dailyBudget)}/day</b></span><span>Delivery window <b>{startDate} → {endDate}</b></span><small>{destinationRequired?"The app/site banner will appear directly beneath the sponsored video and link to the supplied destination.":"No destination link is required for Short-only promotion."}</small></div><button className="primary" disabled={submitting}>{submitting?"Checking…":"Review campaign & expenses"}</button></form>{status&&<div className="status">{status}</div>}</section>
 }
 
 function SponsoredCard({campaign,onNotice}){
