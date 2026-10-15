@@ -51,7 +51,6 @@ jobs:
           # Defaults to the production site; override with the VITE_API_BASE_URL secret if it moves.
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL || 'https://kivora-ecru.vercel.app' }}
           VITE_PUBLIC_URL: ${{ secrets.VITE_PUBLIC_URL || 'https://kivora-ecru.vercel.app' }}
-          VITE_FLUTTERWAVE_PUBLIC_KEY: ${{ secrets.VITE_FLUTTERWAVE_PUBLIC_KEY }}
         run: npm run build
 
       - name: Add Android platform

@@ -1,7 +1,7 @@
 import { adminDb, requireUser } from '../functions/server-auth.js';
 import { calculateBillForUser, validatePromotion, MAX_TARGET_IMPRESSIONS, IMPRESSION_BLOCK_SIZE, MIN_TARGET_IMPRESSIONS, USD_TO_NGN_RATE } from '../functions/ad-engine.js';
 import { validateAsset } from '../functions/moderation.js';
-import { createHostedPayment, verifyHostedPayment } from '../functions/flutterwave.js';
+import { createCardCharge, authorizeCharge, verifyCharge, nextStep, newReference } from '../functions/flutterwave.js';
 import { randomUUID } from 'node:crypto';
 
 const YOUTUBE_ID=/^[A-Za-z0-9_-]{6,}$/;
@@ -87,29 +87,75 @@ async function createCampaign(req,res){
   };
   const db=adminDb(); await db.collection('campaigns').doc(id).set(campaign);
   if(bill.ownerBillingBypass) return res.status(200).json({campaignId:id,paymentRequired:false,campaign});
-  const payment=await createHostedPayment({email:user.email,name:user.name||user.email,campaignId:id,amountNgn:bill.totalNgn});
-  await db.collection('campaigns').doc(id).update({paymentReference:payment.tx_ref,paymentLink:payment.link,paymentChargeId:payment.chargeId||'',updatedAt:new Date().toISOString()});
-  return res.status(200).json({campaignId:id,paymentRequired:true,paymentLink:payment.link,amountNgn:bill.totalNgn,currency:'NGN'});
+  return res.status(200).json({campaignId:id,paymentRequired:true,amountNgn:bill.totalNgn,currency:'NGN'});
 }
 
-async function verifyPayment(req,res){
-  const user=await requireUser(req); const b=req.body||{}; const id=String(b.campaignId||'').trim(); let transactionId=String(b.transactionId||'').trim();
+async function loadOwnCampaign(req,id){
+  const user=await requireUser(req);
   if(!id) throw new Error('campaignId is required.');
-  const db=adminDb(); const ref=db.collection('campaigns').doc(id); const snap=await ref.get();
-  if(!snap.exists) return res.status(404).json({error:'Campaign not found.'});
-  const campaign=snap.data()||{}; if(campaign.advertiserId!==user.uid) return res.status(403).json({error:'Campaign access denied.'});
-  if(campaign.status==='cancelled') return res.status(409).json({error:'This campaign was cancelled.'});
+  const ref=adminDb().collection('campaigns').doc(id); const snap=await ref.get();
+  if(!snap.exists){const e=new Error('Campaign not found.');e.statusCode=404;throw e}
+  const campaign=snap.data()||{};
+  if(campaign.advertiserId!==user.uid){const e=new Error('Campaign access denied.');e.statusCode=403;throw e}
+  if(campaign.status==='cancelled'){const e=new Error('This campaign was cancelled.');e.statusCode=409;throw e}
+  return {user,ref,campaign};
+}
+
+// Re-fetch the charge from Flutterwave and activate the campaign only if reference, amount and currency match.
+async function settle(ref,campaign,chargeId){
+  const v=await verifyCharge({chargeId,expectedReference:campaign.paymentReference,expectedAmount:campaign.totalBudgetNgn,expectedCurrency:'NGN'});
+  if(!v.success) return v;
+  await ref.update({paymentStatus:'verified',status:'ready',paymentTransactionId:String(chargeId),paidAmount:v.amount,paymentVerifiedAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
+  return v;
+}
+
+function stepResponse(res,campaignId,charge,extra={}){
+  const s=nextStep(charge);
+  return res.status(200).json({campaignId,...s,...extra});
+}
+
+// Step 1: card details -> charge. Amount always comes from the stored campaign, never from the browser.
+async function payCampaign(req,res){
+  const b=req.body||{}; const id=String(b.campaignId||'').trim();
+  const {user,ref,campaign}=await loadOwnCampaign(req,id);
+  if(campaign.paymentStatus==='verified') return res.status(200).json({step:'success',campaignId:id});
+  const attempts=Number(campaign.paymentAttempts||0);
+  if(attempts>=5) return res.status(429).json({error:'Too many payment attempts for this campaign. Create a new campaign or contact support.'});
+  const reference=newReference();
+  const origin=String(process.env.KIVORA_PAYMENT_REDIRECT_URL||req.headers?.origin||(process.env.VERCEL_URL?`https://${process.env.VERCEL_URL}`:'http://localhost:5173')).replace(/\/$/,'');
+  const redirectUrl=`${origin}/?payment=campaign&campaignId=${encodeURIComponent(id)}`;
+  const {chargeId,charge}=await createCardCharge({email:user.email,name:user.name||user.email,reference,amountNgn:campaign.totalBudgetNgn,redirectUrl,card:b.card});
+  await ref.update({paymentReference:reference,paymentChargeId:chargeId,paymentAttempts:attempts+1,paymentLink:null,updatedAt:new Date().toISOString()});
+  const next=nextStep(charge);
+  if(next.step==='success'){const v=await settle(ref,{...campaign,paymentReference:reference},chargeId); if(v.success) return res.status(200).json({step:'success',campaignId:id})}
+  return res.status(200).json({campaignId:id,...next});
+}
+
+// Step 2/3: PIN or OTP for the charge already stored on the campaign.
+async function authorizePayment(req,res){
+  const b=req.body||{}; const id=String(b.campaignId||'').trim();
+  const {ref,campaign}=await loadOwnCampaign(req,id);
+  if(campaign.paymentStatus==='verified') return res.status(200).json({step:'success',campaignId:id});
+  if(!campaign.paymentChargeId) return res.status(409).json({error:'Start the card payment first.'});
+  const type=b.type==='otp'?'otp':'pin';
+  const charge=await authorizeCharge({chargeId:campaign.paymentChargeId,type,pin:b.pin,code:b.code});
+  const next=nextStep(charge);
+  if(next.step==='success'){const v=await settle(ref,campaign,campaign.paymentChargeId); if(v.success) return res.status(200).json({step:'success',campaignId:id})}
+  return res.status(200).json({campaignId:id,...next});
+}
+
+// Fallback / 3-D Secure return: poll the real charge status.
+async function verifyPayment(req,res){
+  const b=req.body||{}; const id=String(b.campaignId||'').trim();
+  const {ref,campaign}=await loadOwnCampaign(req,id);
   if(campaign.paymentStatus==='verified') return res.status(200).json({verified:true,campaignId:id});
-  // v4 charges are verified by the charge id stored when the checkout was created.
-  if(campaign.paymentChargeId) transactionId=campaign.paymentChargeId;
-  if(!transactionId) return res.status(402).json({error:'Payment is not verified yet.',status:'pending'});
-  const verification=await verifyHostedPayment({transactionId,expectedReference:campaign.paymentReference,expectedAmount:campaign.totalBudgetNgn,expectedCurrency:'NGN'});
-  if(!verification.success) return res.status(402).json({error:'Payment is not verified yet.',status:verification.status||'pending'});
-  await ref.update({paymentStatus:'verified',status:'ready',paymentTransactionId:transactionId,paidAmount:verification.amount,updatedAt:new Date().toISOString()});
+  if(!campaign.paymentChargeId) return res.status(402).json({error:'Payment is not verified yet.',status:'pending'});
+  const v=await settle(ref,campaign,campaign.paymentChargeId);
+  if(!v.success) return res.status(402).json({error:v.status==='failed'?'The payment failed. Please try again with the card form.':'Payment is not verified yet.',status:v.status||'pending'});
   return res.status(200).json({verified:true,campaignId:id});
 }
 
 export default async function handler(req,res){
   res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('Access-Control-Allow-Methods','GET,POST,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');
   if(req.method==='OPTIONS') return res.status(204).end();
-res.setHeader('Content-Type','application/json; charset=utf-8');try{if(req.method!=='POST')return res.status(405).json({error:'Method not allowed.'});if(req.query?.action==='verify')return await verifyPayment(req,res);if(req.query?.action==='cancel')return await cancelCampaign(req,res);return await createCampaign(req,res)}catch(e){return res.status(e?.statusCode||400).json({error:e?.message||'Campaign request failed.'})}}
+res.setHeader('Content-Type','application/json; charset=utf-8');try{if(req.method!=='POST')return res.status(405).json({error:'Method not allowed.'});if(req.query?.action==='pay')return await payCampaign(req,res);if(req.query?.action==='authorize')return await authorizePayment(req,res);if(req.query?.action==='verify')return await verifyPayment(req,res);if(req.query?.action==='cancel')return await cancelCampaign(req,res);return await createCampaign(req,res)}catch(e){return res.status(e?.statusCode||400).json({error:e?.message||'Campaign request failed.'})}}

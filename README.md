@@ -33,7 +33,7 @@ The Pro entitlement is checked from a server-issued Firebase Auth custom claim (
 - Billing is $1 (about ₦1,300) per campaign targeting approximately 3,000–4,500 qualified impressions. A qualified exposure requires at least 2 seconds and at least 50% visibility.
 - Impression counters and campaign payment state are server-authoritative. Firestore client writes to `campaigns` and `impressionEvents` are disabled; server endpoints use Firebase Admin.
 - Configure `FIREBASE_SERVICE_ACCOUNT_JSON` and `FLW_CLIENT_ID and FLW_CLIENT_SECRET` as Vercel server environment variables. Never put either secret in `VITE_*` variables.
-- Advertiser checkout uses Flutterwave's hosted checkout endpoint server-side, then verifies the transaction before changing a campaign to `ready`.
+- Advertiser checkout is an in-app card form (card details → PIN → OTP / 3-D Secure) using Flutterwave v4 direct charges. Card data is AES-256-GCM encrypted with `FLW_ENCRYPTION_KEY` server-side, never logged or stored. The charge is re-fetched from Flutterwave and matched on reference, amount and currency before a campaign becomes `ready`.
 
 ## Advertising: video-only campaigns, links and expense monitoring
 
@@ -245,8 +245,5 @@ YouTube Shorts eligibility is checked server-side using the YouTube Data API. Th
 Ad impressions are viewer events, not advertiser events. The delivery endpoint accepts signed-in viewers and anonymous viewers; an advertiser viewing their own campaign is not billable. Impression events remain server-side and duplicate exposure keys are rejected.
 
 
-## Shared Flutterwave webhook
-Kivora campaign checkout references start with `KIVORA-` and are handled by the existing WyDev Flutterwave webhook endpoint. The webhook verifies the transaction with Flutterwave, checks reference/amount/currency, then marks the matching Kivora campaign paid and ready. Kivora does not need a second Flutterwave webhook URL.
-
-### Daily quota graceful fallback
-Kivora persists a small, bounded copy of successfully discovered video metadata by category and exact search phrase in localStorage. When YouTube returns a quota-exhaustion error, the app silently displays matching saved results rather than showing a quota popup. Explicit searches only use cache for the same query; category feeds may fall back to the category cache and then the general feed. Watched-video filtering remains enabled for normal discovery, while deliberate search can return a previously watched result. Cached metadata does not cache or download video media; playback still uses YouTube's official embedded player.
+## Payment confirmation
+Payments are confirmed synchronously after card/PIN/OTP and by `/api/ad-campaign?action=verify` (used after a 3-D Secure redirect). WyBuild's webhook forwarder (`/api/wybuild-payment-confirmation`) remains as a backup; see FLUTTERWAVE-WEBHOOK-SETUP.md.

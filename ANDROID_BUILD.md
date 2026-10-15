@@ -20,7 +20,6 @@ Kivora stays a React/Vite app. Capacitor wraps the built `dist/` files in a nati
 | --- | --- | --- |
 | `VITE_API_BASE_URL` | no | Defaults to `https://kivora-ecru.vercel.app` |
 | `VITE_PUBLIC_URL` | no | Share-link URL (defaults to the API URL) |
-| `VITE_FLUTTERWAVE_PUBLIC_KEY` | no | Flutterwave public key |
 | `GOOGLE_SERVICES_JSON` | for Google login | Full contents of `google-services.json` |
 | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | for release APK | Without these the workflow builds a debug APK, which is still installable |
 

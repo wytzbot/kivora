@@ -872,3 +872,6 @@ html body .app:has(.shortCard)>.topbar .inlineSearchBar{pointer-events:auto}
 .dangerBtn{margin-top:10px;min-height:44px;padding:10px 16px;border-radius:12px;border:1px solid #d93025;background:transparent;color:#d93025;font-weight:700;cursor:pointer}
 .dangerBtn:active{background:rgba(217,48,37,.12)}
 .campaignRow .dangerBtn{margin-top:0}
+
+/* Card payment (Flutterwave v4) */
+.cardPay .cardForm{display:grid;gap:14px;margin:18px 0}.cardPay .cardRow{display:grid;grid-template-columns:1fr 1fr;gap:12px}.cardPay input{width:100%;letter-spacing:.06em}.cardPay>button{margin-top:10px;width:100%}
