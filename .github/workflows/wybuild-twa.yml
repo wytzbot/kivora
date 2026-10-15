@@ -1,0 +1,374 @@
+# wybuild-twa-workflow-version: 24
+name: WyBuild TWA
+concurrency:
+  group: wybuild-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+run-name: "WyBuild TWA ${{ fromJSON(inputs.twa_config).packageId || 'auto' }}/${{ inputs.output }} on ${{ github.ref_name }}"
+
+# Converts a web app / PWA into an Android Trusted Web Activity with the Bubblewrap toolchain.
+# GitHub allows at most 25 dispatch inputs, so the full configuration travels as one JSON input.
+on:
+  workflow_dispatch:
+    inputs:
+      twa_config:
+        description: JSON TWA configuration (written by WyBuild)
+        type: string
+        default: "{}"
+      output:
+        description: apk | aab | both
+        type: string
+        default: both
+      use_keystore:
+        description: Sign with the WB_KEYSTORE_* repository secrets
+        type: string
+        default: "true"
+      store_ready:
+        description: Fail the run if the APK is not fit for APKMirror/Uptodown style hosting
+        type: string
+        default: "true"
+      bubblewrap_version:
+        type: string
+        default: "1.25.0"
+      timeout_minutes:
+        description: 15 minutes on Free, 60 minutes on Pro
+        type: string
+        default: "15"
+      wb_ticket:
+        description: One-time build ticket issued by WyBuild. Builds started from the GitHub Actions tab have none and are refused.
+        type: string
+        default: ""
+
+jobs:
+  twa:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    env:
+      TWA_CONFIG: ${{ inputs.twa_config }}
+      OUTPUT: ${{ inputs.output }}
+      USE_KEYSTORE: ${{ inputs.use_keystore }}
+      STORE_READY: ${{ inputs.store_ready }}
+      WB_OUT: ${{ github.workspace }}/.wybuild-out
+      WB_TOOLS: ${{ github.workspace }}/.wybuild-tools
+      WB_KEYSTORE_B64: ${{ secrets.WB_KEYSTORE_BASE64 }}
+      WB_KEYSTORE_PASSWORD: ${{ secrets.WB_KEYSTORE_PASSWORD }}
+      WB_KEY_ALIAS_SECRET: ${{ secrets.WB_KEY_ALIAS }}
+      WB_KEY_PASSWORD: ${{ secrets.WB_KEY_PASSWORD }}
+    steps:
+      - name: Authorize with WyBuild
+        # Builds must be started from the WyBuild app: it checks the plan and quota, then hands this run a
+        # one-time ticket. Running the workflow by hand from the Actions tab has no ticket and stops here.
+        env:
+          WB_APP_URL: "https://wybuild-black.vercel.app"
+          WB_TICKET: ${{ inputs.wb_ticket }}
+        run: |
+          set -uo pipefail
+          case "$WB_APP_URL" in
+            https://*) ;;
+            *) echo "::error::This workflow was not installed by WyBuild (missing app URL). Open WyBuild > Web to Android > Update workflow."; exit 1 ;;
+          esac
+          jq -n --arg t "$WB_TICKET" --arg repo "$GITHUB_REPOSITORY" --arg run "$GITHUB_RUN_ID" --arg att "$GITHUB_RUN_ATTEMPT" --arg ev "$GITHUB_EVENT_NAME" \
+            '{ticket:$t, repo:$repo, runId:$run, runAttempt:$att, event:$ev}' > "$RUNNER_TEMP/wb-auth.json"
+          CODE="$(curl -sS --retry 3 --retry-delay 3 --retry-all-errors -m 30 -o "$RUNNER_TEMP/wb-auth-resp.json" -w '%{http_code}' \
+            -H 'Content-Type: application/json' --data @"$RUNNER_TEMP/wb-auth.json" "${WB_APP_URL%/}/api/build/authorize" || echo 000)"
+          if [ "$CODE" != "200" ]; then
+            MSG="$(jq -r '.error // empty' "$RUNNER_TEMP/wb-auth-resp.json" 2>/dev/null || true)"
+            echo "::error::WyBuild did not authorize this build (HTTP $CODE). ${MSG:-Start builds from the WyBuild app, not from the GitHub Actions tab.}"
+            exit 1
+          fi
+          echo "WyBuild authorized this build."
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Bubblewrap CLI
+        run: |
+          set -euo pipefail
+          mkdir -p "$WB_TOOLS" "$WB_OUT"
+          cd "$WB_TOOLS"
+          # Do not use `npm init --name ...` here. Modern npm interprets that
+          # form as an initializer and tries to download `create-wybuild-tools`.
+          # WyBuild does not publish such a package; create the local manifest directly.
+          cat > package.json <<'JSON'
+          {
+            "name": "wybuild-tools",
+            "private": true,
+            "version": "0.0.0"
+          }
+          JSON
+          npm install --no-audit --no-fund --package-lock=false "@bubblewrap/cli@${{ inputs.bubblewrap_version }}"
+          for f in twa-prepare.mjs twa-generate.mjs twa-verify.sh twa-native.py WyBuildActivity.java WyBuildReminderReceiver.java; do
+            test -f "$GITHUB_WORKSPACE/.github/wybuild/$f" || { echo "::error::.github/wybuild/$f is missing in this repo/branch. Reinstall the WyBuild TWA workflow (WyBuild > Web to Android > Update workflow) so all the WyBuild files are committed."; exit 1; }
+          done
+          cp "$GITHUB_WORKSPACE/.github/wybuild/twa-generate.mjs" .
+          echo "$WB_TOOLS/node_modules/.bin" >> "$GITHUB_PATH"
+          # Version probing can trigger Bubblewrap's first-run interactive JDK prompt.
+          # The next step explicitly configures the runner's JDK and Android SDK, so no probe is needed here.
+
+      - name: Configure Android SDK and Bubblewrap (non-interactive)
+        run: |
+          set -euo pipefail
+          RUNNER_SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          CLT="$RUNNER_SDK/cmdline-tools/latest"
+          test -x "$CLT/bin/sdkmanager" || { echo "::error::sdkmanager not found at $CLT/bin/sdkmanager (Android SDK path: $RUNNER_SDK)"; exit 1; }
+          # Bubblewrap only accepts an Android SDK folder that has a top-level tools/ or bin/ directory
+          # ("The provided androidSdk isn't correct"). The runner's SDK keeps sdkmanager under
+          # cmdline-tools/latest/bin, so build a small SDK root that links to the runner's SDK and adds bin/.
+          SDK="$RUNNER_TEMP/wybuild-android-sdk"
+          rm -rf "$SDK"; mkdir -p "$SDK"
+          for d in "$RUNNER_SDK"/*; do
+            n="$(basename "$d")"
+            case "$n" in
+              build-tools|platforms|ndk|cmake)
+                mkdir -p "$SDK/$n"
+                for v in "$d"/*; do
+                  if [ -e "$v" ]; then ln -s "$v" "$SDK/$n/$(basename "$v")"; fi
+                done ;;
+              licenses) cp -r "$d" "$SDK/licenses" ;;
+              *) ln -s "$d" "$SDK/$n" ;;
+            esac
+          done
+          mkdir -p "$SDK/licenses"
+          ln -sfn "$CLT/bin" "$SDK/bin"
+          # Bubblewrap needs one exact build-tools version (it changes between Bubblewrap releases): install it if the runner lacks it.
+          REQ="$(grep -ohE "BUILD_TOOLS_VERSION *= *['\"][0-9.]+['\"]" "$WB_TOOLS/node_modules/@bubblewrap/core/dist/lib/androidSdk/AndroidSdkTools.js" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          yes | "$CLT/bin/sdkmanager" --licenses --sdk_root="$SDK" >/dev/null 2>&1 || true
+          if [ -n "$REQ" ] && [ ! -d "$SDK/build-tools/$REQ" ]; then
+            echo "Installing Android build-tools $REQ (required by Bubblewrap)"
+            yes | "$CLT/bin/sdkmanager" --sdk_root="$SDK" "build-tools;$REQ" > "$RUNNER_TEMP/sdkmanager.log" 2>&1 || true
+            test -d "$SDK/build-tools/$REQ" || { tail -5 "$RUNNER_TEMP/sdkmanager.log"; echo "::error::Could not install Android build-tools $REQ, which Bubblewrap requires."; exit 1; }
+          fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"; echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/.bubblewrap"
+          printf '{"jdkPath":"%s","androidSdkPath":"%s"}' "$JAVA_HOME" "$SDK" > "$HOME/.bubblewrap/config.json"
+          cat "$HOME/.bubblewrap/config.json"
+          echo "Android SDK for Bubblewrap: $SDK (build-tools: $(ls "$SDK/build-tools" | tr '\n' ' '))"
+
+      - name: Prepare signing key
+        run: |
+          set -euo pipefail
+          KS="$WB_OUT/wybuild-release.jks"
+          if [ "$USE_KEYSTORE" = "true" ]; then
+            test -n "$WB_KEYSTORE_B64" || { echo "::error::WB_KEYSTORE_BASE64 secret is missing. Upload your release keystore in WyBuild > Keystores. A release key is required for APKMirror/Uptodown."; exit 1; }
+            # Normalize whitespace introduced by multiline GitHub secrets, then decode strictly.
+            # Do not print the secret or its contents.
+            B64_CLEAN="$(printf '%s' "$WB_KEYSTORE_B64" | tr -d '[:space:]')"
+            if [ -z "$B64_CLEAN" ]; then
+              echo "::error::WB_KEYSTORE_BASE64 is empty after removing whitespace."
+              exit 1
+            fi
+            if ! printf '%s' "$B64_CLEAN" | base64 --decode > "$KS" 2>"$WB_OUT/base64-error.txt"; then
+              echo "::error::WB_KEYSTORE_BASE64 is not valid Base64. Re-export the raw .jks/.p12 file as Base64 and replace the GitHub secret."
+              sed 's/^/base64: /' "$WB_OUT/base64-error.txt" | head -3
+              exit 1
+            fi
+            BYTES="$(wc -c < "$KS" | tr -d ' ')"
+            if [ "$BYTES" -lt 256 ]; then
+              echo "::error::Decoded release keystore is only ${BYTES} bytes; it is almost certainly truncated or the wrong secret. Upload the complete .jks/.p12 Base64 value."
+              exit 1
+            fi
+            # A Base64 TEXT file that was Base64-encoded a second time decodes to text, not a keystore: unwrap it.
+            if ! LC_ALL=C grep -qavE '^[A-Za-z0-9+/=[:space:]]*$' "$KS"; then
+              if tr -d '[:space:]' < "$KS" | base64 --decode > "$KS.inner" 2>/dev/null && [ -s "$KS.inner" ]; then
+                mv "$KS.inner" "$KS"; BYTES="$(wc -c < "$KS" | tr -d ' ')"
+                echo "::notice::The keystore secret was Base64-encoded twice; WyBuild unwrapped it (${BYTES} bytes)."
+              fi
+            fi
+            ALIAS="$WB_KEY_ALIAS_SECRET"; SPASS="$WB_KEYSTORE_PASSWORD"; KPASS="${WB_KEY_PASSWORD:-$WB_KEYSTORE_PASSWORD}"
+          else
+            if [ "$STORE_READY" = "true" ]; then echo "::error::Store-ready mode needs your own release keystore (use_keystore=true). A throw-away key cannot be used for updates."; exit 1; fi
+            echo "::warning::Using a THROW-AWAY signing key. This APK is for testing only and can never be updated in place."
+            ALIAS="wybuild-temp"; SPASS="$(openssl rand -hex 12)"; KPASS="$SPASS"
+            keytool -genkeypair -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 10000 -keystore "$KS" \
+              -storepass "$SPASS" -keypass "$KPASS" -dname "CN=WyBuild Test, O=WyBuild, C=US" >/dev/null
+          fi
+          echo "::add-mask::$SPASS"; echo "::add-mask::$KPASS"
+          # Validate the actual container and alias before Bubblewrap/Gradle starts.
+          if ! keytool -list -keystore "$KS" -alias "$ALIAS" -storepass "$SPASS" >"$WB_OUT/keytool-check.txt" 2>&1; then
+            sed 's/^/keytool: /' "$WB_OUT/keytool-check.txt" | head -5
+            # non-secret facts so you can compare with your local file: size, first bytes, short fingerprint
+            if [ -f "$KS" ]; then echo "::notice::Decoded keystore: $(wc -c < "$KS" | tr -d ' ') bytes, starts with $(head -c4 "$KS" | od -An -tx1 | tr -d ' \n'), sha256 $(sha256sum "$KS" | cut -c1-12). Compare with: sha256sum your.jks | cut -c1-12"; fi
+            echo "::error::Release keystore validation failed. The decoded file exists but is not a usable keystore with the supplied store password/alias. If the file is .p12/.pfx, export its complete Base64 and use its store password; if it is .jks, use the exact case-sensitive alias and store password."
+            exit 1
+          fi
+          { echo "WB_KEYSTORE_PATH=$KS"; echo "WB_KEY_ALIAS=$ALIAS"; echo "BUBBLEWRAP_KEYSTORE_PASSWORD=$SPASS"; echo "BUBBLEWRAP_KEY_PASSWORD=$KPASS"; } >> "$GITHUB_ENV"
+
+      - name: Resolve configuration (auto-detect from the site's Web App Manifest)
+        run: |
+          node .github/wybuild/twa-prepare.mjs | tee "$WB_OUT/prepare.log"
+          grep -E "^WYBUILD_(PACKAGE|VERSION|VERSION_CODE|WEB_MANIFEST|SNAPSHOT|SOURCE_HOST|SHELL)=" "$WB_OUT/prepare.log" >> "$GITHUB_ENV"
+
+      - name: Generate Android project
+        run: |
+          set -euo pipefail
+          cd "$WB_TOOLS"
+          node twa-generate.mjs
+
+      - name: Apply manual Android features
+        run: |
+          set -euo pipefail
+          P="$WB_OUT/project"
+          # 1) Files in wybuild/android-overrides/ are copied over the generated project
+          #    (custom res/, AndroidManifest.xml, build.gradle, proguard rules, extra Java/Kotlin, ...)
+          if [ -d wybuild/android-overrides ]; then
+            echo "Applying wybuild/android-overrides/"; cp -a wybuild/android-overrides/. "$P/"
+          fi
+          # 2) Standalone app shell, permissions, notifications, fullscreen, link rules, predictive back, notification icon, push kit
+          python3 .github/wybuild/twa-native.py "$P"
+          # 3) Optional hook for anything else: runs inside the generated project
+          if [ -f wybuild/twa-patch.sh ]; then
+            echo "Running wybuild/twa-patch.sh"; (cd "$P" && bash "$GITHUB_WORKSPACE/wybuild/twa-patch.sh")
+          fi
+
+      - name: Build signed APK / AAB (Bubblewrap CLI + Gradle; standalone shell or TWA per settings)
+        env:
+          CI: "true"
+          BUBBLEWRAP_NO_PROMPT: "1"
+        run: |
+          set -euo pipefail
+          P="$WB_OUT/project"; DIST="$WB_OUT/dist"; mkdir -p "$DIST"
+          echo "App shell for this build: ${WYBUILD_SHELL:-standalone}"
+          cd "$P"
+          # Bubblewrap build reads the manifest from the project folder; make sure it is there and matches the checksum
+          cp -f "$WB_OUT/twa-manifest.json" "$P/twa-manifest.json"
+          # keystore path/alias come from twa-manifest.json (signingKey); passwords come from BUBBLEWRAP_* env vars.
+          # stdin is closed and a hard timeout is applied so a surprise prompt fails with a message instead of hanging forever.
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"; echo "$BT" >> "$GITHUB_PATH"; export PATH="$BT:$PATH"
+          if ! timeout 20m bubblewrap build --skipPwaValidation --manifest="$P/twa-manifest.json" --signingKeyPath="$WB_KEYSTORE_PATH" --signingKeyAlias="$WB_KEY_ALIAS" < /dev/null; then
+            echo "::warning::bubblewrap build did not finish (error or timeout). Trying to sign the Gradle output directly."
+            pkill -f gradle 2>/dev/null || true
+            UNSIGNED="$(ls "$P"/app/build/outputs/apk/release/*unsigned*.apk 2>/dev/null | head -1 || true)"
+            if [ -n "$UNSIGNED" ]; then
+              zipalign -f -p 4 "$UNSIGNED" "$P/aligned.apk"
+              apksigner sign --ks "$WB_KEYSTORE_PATH" --ks-key-alias "$WB_KEY_ALIAS" \
+                --ks-pass env:BUBBLEWRAP_KEYSTORE_PASSWORD --key-pass env:BUBBLEWRAP_KEY_PASSWORD \
+                --out "$P/app-release-signed.apk" "$P/aligned.apk" < /dev/null
+            fi
+            AAB="$(ls "$P"/app/build/outputs/bundle/release/*.aab 2>/dev/null | head -1 || true)"
+            if [ -n "$AAB" ] && [ ! -f "$P/app-release-bundle.aab" ]; then
+              cp "$AAB" "$P/app-release-bundle.aab"
+              jarsigner -keystore "$WB_KEYSTORE_PATH" -storepass:env BUBBLEWRAP_KEYSTORE_PASSWORD -keypass:env BUBBLEWRAP_KEY_PASSWORD \
+                "$P/app-release-bundle.aab" "$WB_KEY_ALIAS" < /dev/null
+            fi
+          fi
+          NEED_APK=false; NEED_AAB=false
+          case "$OUTPUT" in apk|both) NEED_APK=true ;; esac
+          case "$OUTPUT" in aab|both) NEED_AAB=true ;; esac
+          if [ "$NEED_APK" = "true" ] && [ ! -f app-release-signed.apk ]; then echo "::error::No signed APK was produced. See the Bubblewrap output above."; exit 1; fi
+          if [ "$NEED_AAB" = "true" ] && [ ! -f app-release-bundle.aab ]; then echo "::error::No signed App Bundle (.aab) was produced. See the Bubblewrap output above."; exit 1; fi
+          NAME="${WYBUILD_PACKAGE}_${WYBUILD_VERSION}_${WYBUILD_VERSION_CODE}"
+          case "$OUTPUT" in
+            apk|both) cp app-release-signed.apk "$DIST/$NAME.apk" ;;
+          esac
+          case "$OUTPUT" in
+            aab|both) test -f app-release-bundle.aab || { echo "::error::No app bundle (.aab) was produced"; exit 1; }
+                      cp app-release-bundle.aab "$DIST/$NAME.aab" ;;
+          esac
+          # Verify whichever signed artifact was requested. AAB-only builds do not require an APK.
+          rm -f "$WB_OUT/verify.apk" "$WB_OUT/verify.aab"
+          case "$OUTPUT" in apk|both) cp app-release-signed.apk "$WB_OUT/verify.apk" ;; esac
+          case "$OUTPUT" in aab|both) cp app-release-bundle.aab "$WB_OUT/verify.aab" ;; esac
+          ls -la "$DIST"
+
+      - name: Digital Asset Links and store-readiness checks
+        run: |
+          set -euo pipefail
+          DIST="$WB_OUT/dist"
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"; export PATH="$BT:$PATH"
+          # Certificate fingerprint -> assetlinks.json (host this at https://<site>/.well-known/assetlinks.json)
+          # keytool indents with a TAB on JDK 17, so match any whitespace (a plain space-only pattern silently finds nothing)
+          KT_OUT="$(keytool -list -v -keystore "$WB_KEYSTORE_PATH" -alias "$WB_KEY_ALIAS" -storepass "$BUBBLEWRAP_KEYSTORE_PASSWORD" 2>&1 || true)"
+          FP="$(printf '%s\n' "$KT_OUT" | sed -n 's/^[[:space:]]*SHA-\{0,1\}256:[[:space:]]*//p' | head -1 | tr -d '\r')"
+          if [ -z "$FP" ]; then
+            # fallback: hash the certificate itself
+            FP="$(keytool -exportcert -keystore "$WB_KEYSTORE_PATH" -alias "$WB_KEY_ALIAS" -storepass "$BUBBLEWRAP_KEYSTORE_PASSWORD" 2>/dev/null | openssl dgst -sha256 -binary | od -An -tx1 | tr -d ' \n' | tr 'a-f' 'A-F' | sed 's/../&:/g; s/:$//')"
+          fi
+          test -n "$FP" || { printf '%s\n' "$KT_OUT" | sed 's/^/keytool: /' | head -8; echo "::error::Could not read the release certificate SHA-256 fingerprint from the configured keystore."; exit 1; }
+          echo "WYBUILD_FINGERPRINT=$FP" >> "$WB_OUT/prepare.log"
+          echo "WYBUILD_FINGERPRINT=$FP" >> "$GITHUB_STEP_SUMMARY"
+          # Google Play re-signs installs with its own app-signing key: list that fingerprint too, otherwise the address bar returns for Play installs
+          PLAY_FP="$(python3 -c 'import json,os;print(json.load(open(os.environ["WB_OUT"]+"/wybuild-extras.json")).get("playSigningFingerprint",""))' 2>/dev/null || true)"
+          FPS="\"$FP\""; [ -n "$PLAY_FP" ] && [ "$PLAY_FP" != "$FP" ] && FPS="$FPS, \"$PLAY_FP\""
+          cat > "$DIST/assetlinks.json" <<JSON
+          [{
+            "relation": ["delegate_permission/common.handle_all_urls"],
+            "target": {
+              "namespace": "android_app",
+              "package_name": "$WYBUILD_PACKAGE",
+              "sha256_cert_fingerprints": [$FPS]
+            }
+          }]
+          JSON
+          cp "$WB_OUT/twa-resolved.json" "$DIST/twa-config.json"
+          cp "$WB_OUT/project/twa-manifest.json" "$DIST/twa-manifest.json"
+          RC=0
+          if [ -f "$WB_OUT/verify.apk" ]; then bash .github/wybuild/twa-verify.sh "$WB_OUT/verify.apk" "$DIST" "$STORE_READY" write || RC=$?; fi
+          if [ -f "$WB_OUT/verify.aab" ]; then bash .github/wybuild/twa-verify.sh "$WB_OUT/verify.aab" "$DIST" "$STORE_READY" append || RC=$?; fi
+          # Play Store needs the .aab, a unique versionCode and a recent target API
+          TSDK="$(grep -rhoE 'targetSdk(Version)?[[:space:]]*(=[[:space:]]*)?[0-9]+' "$WB_OUT/project/app/build.gradle" "$WB_OUT/project/build.gradle" 2>/dev/null | grep -oE '[0-9]+$' | head -1 || true)"
+          { echo "- Target SDK: ${TSDK:-unknown}"; echo "- versionCode: $WYBUILD_VERSION_CODE (must be higher than every build already uploaded to Play)"; } >> "$DIST/store-readiness.md"
+          if [ -n "$TSDK" ] && [ "$TSDK" -lt 35 ]; then echo "::warning::targetSdk $TSDK is below what Google Play currently accepts for new uploads. Update Bubblewrap (bubblewrap_version input) if Play Console rejects the bundle."; fi
+          { echo "## WyBuild TWA: $WYBUILD_PACKAGE $WYBUILD_VERSION ($WYBUILD_VERSION_CODE)"; cat "$DIST/store-readiness.md"
+            echo; echo "### Digital Asset Links"; echo "Publish \`assetlinks.json\` at \`https://$WYBUILD_SOURCE_HOST/.well-known/assetlinks.json\` (no redirect):"; echo '```json'; cat "$DIST/assetlinks.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $RC
+
+      - name: Check the live site trusts this app (only the Trusted Web Activity shell needs this to hide the address bar)
+        if: ${{ env.WYBUILD_SHELL == 'twa' }}
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request, urllib.parse
+          out = os.environ["WB_OUT"]
+          cfg = json.load(open(out + "/twa-resolved.json"))
+          fps = []
+          for line in open(out + "/prepare.log"):
+              if line.startswith("WYBUILD_FINGERPRINT="): fps.append(line.split("=", 1)[1].strip())
+          extra = json.load(open(out + "/wybuild-extras.json")).get("playSigningFingerprint", "")
+          if extra: fps.append(extra)
+          hosts = [cfg["host"]] + [h.replace("https://", "").strip("/") for h in cfg.get("additionalTrustedOrigins", [])]
+          lines, bad = [], False
+          for h in dict.fromkeys(hosts):
+              site = "https://" + h
+              # 1) the file itself, with no redirect (Android refuses redirected asset links)
+              try:
+                  class NoRedirect(urllib.request.HTTPRedirectHandler):
+                      def redirect_request(self, *a, **k): return None
+                  op = urllib.request.build_opener(NoRedirect)
+                  r = op.open(urllib.request.Request(site + "/.well-known/assetlinks.json", headers={"User-Agent": "WyBuild"}), timeout=15)
+                  body = json.loads(r.read().decode("utf8"))
+                  mine = [e for e in body if e.get("target", {}).get("package_name") == cfg["packageId"]]
+                  have = {x.upper() for e in mine for x in e.get("target", {}).get("sha256_cert_fingerprints", [])}
+                  ok = bool(mine) and any(f.upper() in have for f in fps[:1])
+                  lines.append("- %s %s: assetlinks.json %s" % ("OK" if ok else "FIX", h, "lists this app and signing key" if ok else ("is published but does NOT list package %s with this key" % cfg["packageId"])))
+                  bad |= not ok
+                  continue
+              except Exception as e:
+                  lines.append("- FIX %s: https://%s/.well-known/assetlinks.json is not reachable as a plain 200 response (%s)" % (h, h, str(e)[:80]))
+                  bad = True
+          report = "### Fullscreen check: does the live site trust this app?\n" + "\n".join(lines) + "\n"
+          if bad:
+              report += "\nUntil the file is fixed, Android shows the browser address bar inside the app. Publish the `assetlinks.json` from this build's artifact at `/.well-known/assetlinks.json` (HTTPS, no redirect, `application/json`).\n"
+              print("::warning::The live site does not trust this app yet, so the address bar will show. See the run summary.")
+          open(os.environ["GITHUB_STEP_SUMMARY"], "a").write(report)
+          os.makedirs(out + "/dist", exist_ok=True)
+          open(out + "/dist/fullscreen-check.md", "w").write(report)
+          PY
+
+      - name: Upload artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: wb-twa-${{ github.run_id }}
+          path: .wybuild-out/dist/**
+          include-hidden-files: true
+          if-no-files-found: warn
