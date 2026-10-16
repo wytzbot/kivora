@@ -27,12 +27,31 @@ googleProvider.setCustomParameters({prompt:"select_account"});
 
 if(typeof window!=="undefined") isSupported().then(ok=>ok&&getAnalytics(app)).catch(()=>{});
 
+// Google access tokens last about an hour. Keep the token (with its expiry) across app restarts so a cold start does not
+// force a second Google consent prompt before the first Like/Comment.
+const YT_TOKEN_KEY="kivora-yt-token-v1";
+const YT_TOKEN_TTL_MS=50*60*1000;
+function saveYouTubeToken(token){
+  if(!token)return;
+  try{localStorage.setItem(YT_TOKEN_KEY,JSON.stringify({token,exp:Date.now()+YT_TOKEN_TTL_MS,uid:auth.currentUser?.uid||""}))}catch{}
+  try{sessionStorage.setItem("kivora-youtube-access-token",token)}catch{}
+}
+function readYouTubeToken(){
+  try{
+    const v=JSON.parse(localStorage.getItem(YT_TOKEN_KEY)||"null");
+    if(v?.token&&Number(v.exp)>Date.now()&&(!v.uid||!auth.currentUser||v.uid===auth.currentUser.uid))return v.token;
+    if(v)localStorage.removeItem(YT_TOKEN_KEY);
+  }catch{}
+  return "";
+}
+function clearYouTubeToken(){try{localStorage.removeItem(YT_TOKEN_KEY)}catch{}try{sessionStorage.removeItem("kivora-youtube-access-token")}catch{}}
 const YOUTUBE_SCOPES=["https://www.googleapis.com/auth/youtube.force-ssl","https://www.googleapis.com/auth/youtube.readonly"];
 export async function finishGoogleRedirect(){
   try {
     const result=await getRedirectResult(auth);
     const token=result?GoogleAuthProvider.credentialFromResult(result)?.accessToken:null;
-    if(token) sessionStorage.setItem("kivora-youtube-access-token",token);
+    if(token) saveYouTubeToken(token);
+    try{sessionStorage.removeItem("kivora-redirect-retry")}catch{}
     return result;
   } catch(e) {
     if(e?.code === "auth/popup-closed-by-user") return null;
@@ -41,9 +60,13 @@ export async function finishGoogleRedirect(){
     // a real Kivora account. In that case, authenticate that existing account
     // instead of surfacing a dead-end Firebase error.
     if(["auth/credential-already-in-use","auth/account-exists-with-different-credential"].includes(e?.code)){
-      try {
-        return await signInWithRedirect(auth,googleProvider);
-      } catch(inner){ throw inner; }
+      // Retry the redirect once only. Without this guard a persistent conflict bounces the user between Google and
+      // Kivora forever.
+      let already=false;
+      try{already=sessionStorage.getItem("kivora-redirect-retry")==="1"}catch{}
+      if(already){try{sessionStorage.removeItem("kivora-redirect-retry")}catch{}throw e;}
+      try{sessionStorage.setItem("kivora-redirect-retry","1")}catch{}
+      return await signInWithRedirect(auth,googleProvider);
     }
     throw e;
   }
@@ -52,7 +75,15 @@ export async function startAnonymousSession(){
   if(auth.currentUser) return auth.currentUser;
   return (await signInAnonymously(auth)).user;
 }
-export async function signInWithGoogle(){
+let signInInFlight=null;
+// Only one Google sign-in can run at a time. A double tap used to open a second popup/redirect, which Firebase reports as
+// "cancelled-popup-request" and which then fell through to a full-page redirect.
+export function signInWithGoogle(){
+  if(signInInFlight)return signInInFlight;
+  signInInFlight=runGoogleSignIn().finally(()=>{signInInFlight=null});
+  return signInInFlight;
+}
+async function runGoogleSignIn(){
   // Capacitor Android: use the native Google account chooser. Do not launch
   // Firebase web popup/redirect from the WebView, because it can strand the
   // user in Chrome and return to the hosted site instead of the APK.
@@ -78,7 +109,7 @@ export async function signInWithGoogle(){
     // the Firebase JS SDK owns the app's web-compatible Firebase session.
     const signedIn = await signInWithCredential(auth, credential);
     const accessToken = result?.credential?.accessToken;
-    if(accessToken) sessionStorage.setItem("kivora-youtube-access-token",accessToken);
+    if(accessToken) saveYouTubeToken(accessToken);
     return signedIn.user;
   }
   // Installed TWA / standalone PWA: this is not a native APK bridge. Use a
@@ -89,11 +120,15 @@ export async function signInWithGoogle(){
   try {
     const result=await signInWithPopup(auth,googleProvider);
     const credential=GoogleAuthProvider.credentialFromResult(result);
-    if(credential?.accessToken) sessionStorage.setItem("kivora-youtube-access-token",credential.accessToken);
+    if(credential?.accessToken) saveYouTubeToken(credential.accessToken);
     return result.user;
   }
   catch(e){
-    if(["auth/popup-blocked","auth/operation-not-supported-in-this-environment","auth/cancelled-popup-request"].includes(e?.code)){
+    // The user closed the window, or tapped twice: this is a cancel, not an error and not a reason to redirect.
+    if(["auth/popup-closed-by-user","auth/cancelled-popup-request","auth/user-cancelled"].includes(e?.code)){
+      throw Object.assign(new Error("Google sign-in was cancelled."),{code:"auth/popup-closed-by-user"});
+    }
+    if(["auth/popup-blocked","auth/operation-not-supported-in-this-environment"].includes(e?.code)){
       await signInWithRedirect(auth,googleProvider); return null;
     }
     if(["auth/credential-already-in-use","auth/account-exists-with-different-credential"].includes(e?.code)){
@@ -104,7 +139,7 @@ export async function signInWithGoogle(){
 }
 
 export async function getYouTubeAccessToken(){
-  const cached=sessionStorage.getItem("kivora-youtube-access-token");
+  const cached=readYouTubeToken();
   if(cached) return cached;
   const user=auth.currentUser;
   if(!user||user.isAnonymous) throw new Error("Sign in with Google to use YouTube actions.");
@@ -113,7 +148,7 @@ export async function getYouTubeAccessToken(){
     const result = await FirebaseAuthentication.signInWithGoogle({ scopes: YOUTUBE_SCOPES });
     const token = result?.credential?.accessToken;
     if(!token) throw new Error("Google did not return a YouTube access token. Sign in again from the menu.");
-    sessionStorage.setItem("kivora-youtube-access-token",token);
+    saveYouTubeToken(token);
     return token;
   }
   const provider=new GoogleAuthProvider();
@@ -126,10 +161,10 @@ export async function getYouTubeAccessToken(){
   const result=await reauthenticateWithPopup(user,provider);
   const credential=GoogleAuthProvider.credentialFromResult(result);
   if(!credential?.accessToken) throw new Error("Google did not return a YouTube access token. Check OAuth consent and authorized domains.");
-  sessionStorage.setItem("kivora-youtube-access-token",credential.accessToken);
+  saveYouTubeToken(credential.accessToken);
   return credential.accessToken;
 }
-export async function logOut(){sessionStorage.removeItem("kivora-youtube-access-token");return signOut(auth);}
+export async function logOut(){clearYouTubeToken();return signOut(auth);}
 export {onAuthStateChanged};
 
 export async function getProEntitlement(user=auth.currentUser){

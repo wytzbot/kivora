@@ -77,10 +77,11 @@ function normalizeVideo(item){
  };
 }
 
-async function fetchKivoraVideos(query="", category="all", pageTokens=[]){
+async function fetchKivoraVideos(query="", category="all", pageTokens=[], variant=0){
  const params=new URLSearchParams();
  if(query) params.set("q",query);
  if(category && category!=="all") params.set("category",category);
+ if(!query && variant) params.set("variant",String(variant));
  (Array.isArray(pageTokens)?pageTokens:[]).forEach((token,index)=>{if(token) params.set(`pageToken${index}`,token)});
  const qs=params.toString();
  const url=apiUrl(`/api/youtube-search${qs?`?${qs}`:""}`);
@@ -133,7 +134,7 @@ function App(){
  const [ratings,setRatings]=useState({}),[query,setQuery]=useState(""),[category,setCategory]=useState("all"),[videos,setVideos]=useState(EMPTY_VIDEOS),[pageTokens,setPageTokens]=useState([]),[hasMore,setHasMore]=useState(true),[loadingMore,setLoadingMore]=useState(false),[sponsored,setSponsored]=useState([]),[videoLoading,setVideoLoading]=useState(true),[videoError,setVideoError]=useState(""),[theme,setTheme]=useState(()=>localStorage.getItem("kivora-theme")||"system"),[installPrompt,setInstallPrompt]=useState(null),[selectedVideo,setSelectedVideo]=useState(null);
  const [authReady,setAuthReady]=useState(false),[categoryMenuOpen,setCategoryMenuOpen]=useState(false),[searchOpen,setSearchOpen]=useState(false),[shuffleOrder,setShuffleOrder]=useState([]);
  const [barHidden,setBarHidden]=useState(false);
- const feedSentinelRef=useRef(null),feedCacheRef=useRef({}),feedRequestRef=useRef(0),seenRef=useRef(null),orderRef=useRef({rank:new Map(),batch:0}),autoMoreRef=useRef(0);
+ const feedSentinelRef=useRef(null),feedCacheRef=useRef({}),feedRequestRef=useRef(0),seenRef=useRef(null),orderRef=useRef({rank:new Map(),batch:0}),autoMoreRef=useRef(0),feedVariantRef=useRef(Math.floor(Math.random()*1000));
  if(!seenRef.current)seenRef.current=readSeen();
  const signedIn=!!user&&!user.isAnonymous;
  const owner=isKivoraOwner(user);
@@ -210,17 +211,25 @@ function App(){
    return()=>document.removeEventListener("scroll",onScroll,true);
  },[]);
  useEffect(()=>{ if(notice){const t=setTimeout(()=>setNotice(""),4200);return()=>clearTimeout(t)} },[notice]);
- useEffect(()=>{const onSeen=e=>{const id=String(e?.detail||"");if(id)seenRef.current.add(id)};window.addEventListener("kivora:seen",onSeen);return()=>window.removeEventListener("kivora:seen",onSeen)},[]);
+ // seenRef is a SNAPSHOT of what was seen before this feed started (taken at launch, refresh and category/search change).
+ // Videos watched during this scroll stay in place, so cards no longer vanish and shift the snapshot mid-scroll, but they are
+ // excluded from the next refresh, category change or app launch.
+ // Sponsored cards come from the server (/api/ad-feed), which applies payment, moderation, start/end dates and remaining-impression
+ // rules and strips advertiser/payment fields. The browser no longer queries the campaigns collection for the feed.
  useEffect(()=>{
    let live=true;
    (async()=>{
      try{
-       const snap=await getDocs(fsQuery(collection(db,"campaigns"),where("status","==","ready"),limit(12)));
-       if(live)setSponsored(snap.docs.map(d=>({id:d.id,...d.data()})).filter(c=>c.format==="video"&&c.moderationStatus==="approved"&&c.assetStatus==="verified"&&c.paymentStatus==="verified"&&Number(c.remainingImpressions??1)>0));
+       const headers={accept:"application/json"};
+       const u=auth.currentUser;
+       if(u&&!u.isAnonymous){try{headers.Authorization=`Bearer ${await u.getIdToken()}`}catch{}}
+       const r=await fetch(apiUrl("/api/ad-feed"),{headers});
+       const d=await r.json().catch(()=>({}));
+       if(live)setSponsored(Array.isArray(d?.campaigns)?d.campaigns:[]);
      }catch{if(live)setSponsored([])}
    })();
    return()=>{live=false};
- },[]);
+ },[signedIn]);
 
  useEffect(()=>{
    let live=true;
@@ -233,6 +242,8 @@ function App(){
  useEffect(()=>{
    if(!signedIn)return;
    const q=query.trim(),key=`${category}::${q.toLowerCase()}`,requestId=++feedRequestRef.current;
+   seenRef.current=readSeen();feedVariantRef.current=(feedVariantRef.current+1)%100000;
+   orderRef.current={rank:new Map(),batch:0};
    setShuffleOrder([]);
    // Always ask YouTube for a fresh result set on category/search changes. Never merge
    // stale in-memory category results into a new discovery response.
@@ -241,7 +252,7 @@ function App(){
    const timer=setTimeout(async()=>{
     setVideoError("");
     try{
-      const result=await fetchKivoraVideos(q,category,[]);
+      const result=await fetchKivoraVideos(q,category,[],feedVariantRef.current);
       if(requestId!==feedRequestRef.current)return;
       const unique=Array.from(new Map(result.items.map(v=>[v.id,v])).values());
       // Searches are explicit intent and must show current YouTube matches even if watched before.
@@ -269,7 +280,7 @@ function App(){
    if(videoLoading||loadingMore||!hasMore)return;
    setLoadingMore(true);setVideoError("");
    try{
-     const result=await fetchKivoraVideos(query.trim(),category,pageTokens);
+     const result=await fetchKivoraVideos(query.trim(),category,pageTokens,feedVariantRef.current);
      const explicitSearch=!!query.trim();
      const candidates=result.items.filter(v=>explicitSearch||!seenRef.current.has(v.id));
      setVideos(prev=>{
@@ -298,22 +309,24 @@ function App(){
  useEffect(()=>{autoMoreRef.current=0},[query,category]);
  // If most of the loaded videos were already watched, quietly fetch another page so repeat visits stay fresh.
  useEffect(()=>{
-   if(!signedIn||videoLoading||loadingMore||!hasMore||query.trim()||!videos.length||autoMoreRef.current>=3)return;
+   if(!signedIn||videoLoading||loadingMore||!hasMore||query.trim()||!videos.length||autoMoreRef.current>=6)return;
    const unseen=videos.filter(v=>!seenRef.current.has(v.id)).length;
    if(unseen<12){autoMoreRef.current++;loadMoreVideos();}
  },[videos,videoLoading,loadingMore,hasMore,signedIn]);
 
  async function guest(){await google()}
- async function google(){setBusy(true);try{const r=await signInWithGoogle();if(r)setNotice("Google sign-in complete.");}catch(e){setNotice(authMessage(e))}finally{setBusy(false)}}
+ async function google(){if(busy)return;setBusy(true);try{const r=await signInWithGoogle();if(r)setNotice("Google sign-in complete.");}catch(e){const m=authMessage(e);if(m)setNotice(m)}finally{setBusy(false)}}
 
  async function refreshFeed(){
    // Refresh means fetch new YouTube discovery results, not reshuffle the same cards.
    const requestId=++feedRequestRef.current;
    const q=query.trim();
+   seenRef.current=readSeen();feedVariantRef.current=(feedVariantRef.current+1)%100000;
+   orderRef.current={rank:new Map(),batch:0};autoMoreRef.current=0;
    setVideoLoading(true);setVideoError("");setVideos([]);setPageTokens([]);setHasMore(false);setShuffleOrder([]);
    requestAnimationFrame(()=>document.querySelector(".feed")?.scrollTo({top:0,behavior:"auto"}));
    try{
-    const result=await fetchKivoraVideos(q,category,[]);
+    const result=await fetchKivoraVideos(q,category,[],feedVariantRef.current);
     if(requestId!==feedRequestRef.current)return;
     const unique=Array.from(new Map(result.items.map(v=>[v.id,v])).values());
     const fresh=q?unique:unique.filter(v=>!seenRef.current.has(v.id));
@@ -472,7 +485,7 @@ function App(){
       const shownAdIds=new Set();
       ranked.forEach((v,i)=>{
         cards.push(<ShortsPlayer key={v.id} video={v} user={user} onOpen={openVideo} onNotice={setNotice} onNavigate={jumpVideo} audioConsent={audioConsent}/>);
-        if(eligibleSponsored.length && (i+1)%8===0 && Math.floor(i/8)<eligibleSponsored.length){const ad=eligibleSponsored[Math.floor(i/8)];const adVideo={id:ad.assetSource==="drive"?ad.assetId:extractYouTubeId(ad.assetId||ad.youtubeUrl||""),source:ad.assetSource||"youtube",assetId:ad.assetId,title:ad.title||"Sponsored Short",channelTitle:ad.brand||"Advertiser",durationSeconds:Number(ad.durationSeconds||ad.duration||30),site:ad.site||"",destinationName:ad.destinationName||ad.brand||"",siteIcon:ad.siteIcon||"",promotionType:ad.promotionType||"short",};if(adVideo.id&&!seenVideoIds.has(adVideo.id)&&!shownAdIds.has(adVideo.id)){shownAdIds.add(adVideo.id);cards.push(<ShortsPlayer key={`ad-${ad.id}-${i}`} video={adVideo} user={user} onNotice={setNotice} onNavigate={jumpVideo} ad playbackKey={ad.id} campaignId={ad.id} audioConsent={audioConsent}/>);}}
+        if(eligibleSponsored.length && (i+1)%8===0 && Math.floor(i/8)<eligibleSponsored.length){const ad=eligibleSponsored[Math.floor(i/8)];const adVideo={id:ad.assetSource==="drive"?ad.assetId:extractYouTubeId(ad.assetId||ad.youtubeUrl||""),source:ad.assetSource||"youtube",assetId:ad.assetId,title:ad.title||"Sponsored Short",channelTitle:ad.brand||"Advertiser",durationSeconds:Number(ad.durationSeconds||ad.duration||30),site:ad.site||"",destinationName:ad.destinationName||ad.brand||"",siteIcon:ad.siteIcon||"",promotionType:ad.promotionType||"short",};if(adVideo.id&&!seenVideoIds.has(adVideo.id)&&!shownAdIds.has(adVideo.id)){shownAdIds.add(adVideo.id);cards.push(<ShortsPlayer key={`ad-${ad.id}`} video={adVideo} user={user} onNotice={setNotice} onNavigate={jumpVideo} ad playbackKey={ad.id} campaignId={ad.id} audioConsent={audioConsent}/>);}}
       });
       if(!cards.length&&!videoLoading)cards.push(<section className="emptyState" key="empty"><h3>No videos to show</h3><p>Try another category or search term.</p></section>);
       return cards;
@@ -641,7 +654,7 @@ function ShortsPlayer({video,user,onOpen,onNotice,onNavigate,ad=false,playbackKe
  const box=useRef(null),player=useRef(null),visibleRef=useRef(false),countedRef=useRef(false),impressionTimer=useRef(null),exposureKey=useRef(crypto.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`);
  const [ready,setReady]=useState(false),[playing,setPlaying]=useState(false),[started,setStarted]=useState(false),[visibleRatio,setVisibleRatio]=useState(0),[youtubeStats,setYoutubeStats]=useState(null);
  const [quickMenuOpen,setQuickMenuOpen]=useState(false),[descriptionOpen,setDescriptionOpen]=useState(false);
- const ytHost=useRef(null),prewarmRef=useRef(false),mutedByWarm=useRef(false),dwellTimer=useRef(null),userRef=useRef(user);userRef.current=user;
+ const ytHost=useRef(null),prewarmRef=useRef(false),mutedByWarm=useRef(false),dwellTimer=useRef(null),earlySeen=useRef(null),userRef=useRef(user);userRef.current=user;
  const [warming,setWarming]=useState(false);
  useEffect(()=>{
    if(!ad||video.source==="drive"||!video.id)return;
@@ -665,7 +678,7 @@ function ShortsPlayer({video,user,onOpen,onNotice,onNavigate,ad=false,playbackKe
    try{
      const headers={'Content-Type':'application/json'};
      if(u&&!u.isAnonymous) headers.Authorization=`Bearer ${await u.getIdToken()}`;
-     const res=await fetch(apiUrl('/api/ad-impression'),{method:'POST',headers,body:JSON.stringify({campaignId,impressionKey:`${campaignId}-${exposureKey.current}`,viewerKey:`${u?.uid||'anonymous'}-${exposureKey.current}`,secondsViewed:2,visibleRatio:Math.max(.5,visibleRatio),source:isDrive?'drive':'youtube'})});
+     const res=await fetch(apiUrl('/api/ad-impression'),{method:'POST',headers,keepalive:true,body:JSON.stringify({campaignId,impressionKey:`${campaignId}-${exposureKey.current}`,viewerKey:`${u?.uid||'anonymous'}-${exposureKey.current}`,deviceId:kivoraDeviceId(),secondsViewed:2,visibleRatio:Math.max(.5,visibleRatio),source:isDrive?'drive':'youtube'})});
      if(!res.ok){countedRef.current=false;return;}
    }catch{countedRef.current=false;}
  }
@@ -733,13 +746,19 @@ function ShortsPlayer({video,user,onOpen,onNotice,onNavigate,ad=false,playbackKe
      const ratio=Number(entry.intersectionRatio||0);setVisibleRatio(ratio);
      const active=entry.isIntersecting&&ratio>=.55;visibleRef.current=active;
      if(!ad){
-       if(active){if(!dwellTimer.current)dwellTimer.current=setTimeout(()=>{dwellTimer.current=null;recordWatch(userRef.current?.uid,video)},1500)}
-       else if(dwellTimer.current){clearTimeout(dwellTimer.current);dwellTimer.current=null}
+       if(active){
+         // Shown for 0.6s counts as "seen" (so a quick scroll-past never returns after a refresh); 1.5s counts as "watched" (history).
+         if(!earlySeen.current)earlySeen.current=setTimeout(()=>{earlySeen.current=null;markSeen(video.id)},600);
+         if(!dwellTimer.current)dwellTimer.current=setTimeout(()=>{dwellTimer.current=null;recordWatch(userRef.current?.uid,video)},1500);
+       }else{
+         if(earlySeen.current){clearTimeout(earlySeen.current);earlySeen.current=null}
+         if(dwellTimer.current){clearTimeout(dwellTimer.current);dwellTimer.current=null}
+       }
      }
      if(!player.current||!ready){if(active&&isDrive)armImpression();else if(!active)disarmImpression();return;}
      try{if(active){prewarmRef.current=false;setWarming(false);const needUnmute=audioConsent||mutedByWarm.current;mutedByWarm.current=false;if(needUnmute)player.current.unMute();player.current.playVideo();setPlaying(true);armImpression()}else{player.current.pauseVideo();setPlaying(false);disarmImpression()}}catch{}
    },{threshold:[0,.5,.72,.9],rootMargin:'0px'});
-   observer.observe(node);return()=>{observer.disconnect();disarmImpression();if(dwellTimer.current){clearTimeout(dwellTimer.current);dwellTimer.current=null}};
+   observer.observe(node);return()=>{observer.disconnect();disarmImpression();if(earlySeen.current){clearTimeout(earlySeen.current);earlySeen.current=null}if(dwellTimer.current){clearTimeout(dwellTimer.current);dwellTimer.current=null}};
  },[ready,isDrive,audioConsent]);
 
  const embed= isDrive ? `https://drive.google.com/file/d/${encodeURIComponent(driveId)}/preview?autoplay=1` : "";
@@ -827,11 +846,44 @@ function OriginalityRating({video,user,onNotice}){
  </div>
 }
 
-const HISTORY_CAP=100,SEEN_CAP=10000;
+const HISTORY_CAP=100,SEEN_CAP=10000,SEEN_KEY="kivora-seen-v1";
 function historyKey(uid){return `kivora-history-v1:${uid||"guest"}`}
 function readHistory(uid){try{const a=JSON.parse(localStorage.getItem(historyKey(uid))||"[]");return Array.isArray(a)?a:[]}catch{return[]}}
-function readSeen(){try{return new Set(JSON.parse(localStorage.getItem("kivora-seen-v1")||"[]"))}catch{return new Set()}}
-function markSeen(id){try{const arr=JSON.parse(localStorage.getItem("kivora-seen-v1")||"[]");if(!arr.includes(id)){arr.push(id);localStorage.setItem("kivora-seen-v1",JSON.stringify(arr.slice(-SEEN_CAP)));window.dispatchEvent(new CustomEvent("kivora:seen",{detail:id}))}}catch{}}
+// Videos the viewer has already been shown. Kept in memory and written to localStorage in small batches (and always when the
+// app is hidden or closed), so a restart or refresh cannot bring back a Short that was already seen. The old version parsed
+// and rewrote a 10,000-entry array on every Short, which slowed scrolling and lost entries when the app was killed.
+let seenStore=null,seenFlushTimer=null;
+function loadSeenStore(){
+ if(seenStore)return seenStore;
+ try{const a=JSON.parse(localStorage.getItem(SEEN_KEY)||"[]");seenStore=new Set(Array.isArray(a)?a.filter(x=>typeof x==="string"):[])}catch{seenStore=new Set()}
+ return seenStore;
+}
+function flushSeen(){
+ seenFlushTimer=null;if(!seenStore)return;
+ try{
+  // Merge with what another tab/window may have saved meanwhile, then keep the newest SEEN_CAP ids.
+  try{const disk=JSON.parse(localStorage.getItem(SEEN_KEY)||"[]");if(Array.isArray(disk))disk.forEach(id=>{if(typeof id==="string")seenStore.add(id)})}catch{}
+  let arr=Array.from(seenStore);
+  if(arr.length>SEEN_CAP){arr=arr.slice(-SEEN_CAP);seenStore=new Set(arr)}
+  localStorage.setItem(SEEN_KEY,JSON.stringify(arr));
+ }catch{}
+}
+function readSeen(){return new Set(loadSeenStore())}
+function markSeen(id){
+ if(!id)return;
+ const set=loadSeenStore();
+ if(set.has(id))return;
+ set.add(id);
+ if(!seenFlushTimer)seenFlushTimer=setTimeout(flushSeen,500);
+}
+if(typeof window!=="undefined"){
+ window.addEventListener("pagehide",flushSeen);
+ document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="hidden")flushSeen()});
+}
+// Stable per-install id. Lets the server apply one-impression-per-viewer limits to ads even for signed-out requests.
+function kivoraDeviceId(){
+ try{let v=localStorage.getItem("kivora-device-id");if(!v||!/^[A-Za-z0-9_-]{16,}$/.test(v)){v=(crypto.randomUUID?.()||`${Date.now()}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`).replace(/[^A-Za-z0-9_-]/g,"");localStorage.setItem("kivora-device-id",v)}return v}catch{return ""}
+}
 // Called once a Short has been on screen long enough to count as watched. Stored on this device (localStorage).
 function recordWatch(uid,video){
  if(!video?.id)return;
@@ -855,6 +907,31 @@ function ConfirmModal({title,message,yes="Yes",no="No",busy,onYes,onNo}){
 function CardPayment({campaignId,amountNgn,onPaid,onBack,onCancel}){
  const [stage,setStage]=useState("card"),[busy,setBusy]=useState(false),[msg,setMsg]=useState("");
  const [number,setNumber]=useState(""),[exp,setExp]=useState(""),[cvv,setCvv]=useState(""),[pin,setPin]=useState(""),[otp,setOtp]=useState("");
+ const [awaiting,setAwaiting]=useState(false);
+ // lockRef closes the gap between a tap and React re-rendering the disabled button, so a fast double tap can never submit twice.
+ const lockRef=useRef(false),doneRef=useRef(false),liveRef=useRef(true);
+ useEffect(()=>{liveRef.current=true;return()=>{liveRef.current=false}},[]);
+ function finish(){if(doneRef.current)return;doneRef.current=true;setAwaiting(false);setNumber("");setExp("");setCvv("");setPin("");setOtp("");onPaid()}
+ // After a bank redirect (3-D Secure) or a "pending" answer, keep checking quietly: when the bank finishes, or the person comes
+ // back to the app from the bank page, the campaign activates without any button press.
+ async function silentVerify(){
+  if(doneRef.current||!liveRef.current)return false;
+  try{
+   const r=await authedFetch(apiUrl("/api/ad-campaign?action=verify"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({campaignId})});
+   const d=await r.json().catch(()=>({}));
+   if(r.ok&&d.verified){finish();return true}
+   if(d?.status==="failed"&&liveRef.current){setAwaiting(false);setStage("card");setMsg(d.error||"The payment failed. Try again with the card form.")}
+  }catch{}
+  return false;
+ }
+ useEffect(()=>{
+  if(!awaiting)return;
+  let n=0;
+  const timer=setInterval(async()=>{n++;const ok=await silentVerify();if(ok||n>=45||!liveRef.current)clearInterval(timer)},4000);
+  const onVisible=()=>{if(document.visibilityState==="visible")silentVerify()};
+  document.addEventListener("visibilitychange",onVisible);
+  return()=>{clearInterval(timer);document.removeEventListener("visibilitychange",onVisible)};
+ },[awaiting]);
  async function call(action,body){
   const r=await authedFetch(apiUrl(`/api/ad-campaign?action=${action}`),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({campaignId,...body})});
   const d=await r.json().catch(()=>({}));
@@ -862,16 +939,16 @@ function CardPayment({campaignId,amountNgn,onPaid,onBack,onCancel}){
   return d;
  }
  function handle(d){
-  if(d.step==="success"){setNumber("");setExp("");setCvv("");setPin("");setOtp("");onPaid();return}
-  if(d.step==="pin"){setStage("pin");setMsg("Enter your 4-digit card PIN.");return}
-  if(d.step==="otp"){setStage("otp");setMsg(d.message||"Enter the OTP your bank sent you.");return}
-  if(d.step==="redirect"&&d.redirectUrl){setMsg("Opening your bank's secure verification page…");openExternal(d.redirectUrl);return}
-  if(d.step==="failed"){setStage("card");setPin("");setOtp("");setMsg(d.message||"Payment failed. Check your card details and try again.");return}
-  setMsg(d.message||"Waiting for your bank to confirm the payment. Tap Check payment status in a moment.");
+  if(d.step==="success"){finish();return}
+  if(d.step==="pin"){setAwaiting(false);setStage("pin");setMsg("Enter your 4-digit card PIN.");return}
+  if(d.step==="otp"){setAwaiting(false);setStage("otp");setMsg(d.message||"Enter the OTP your bank sent you.");return}
+  if(d.step==="redirect"&&d.redirectUrl){setMsg("Opening your bank's secure verification page. Come back to Kivora when you finish; this page will update by itself.");setAwaiting(true);openExternal(d.redirectUrl);return}
+  if(d.step==="failed"){setAwaiting(false);setStage("card");setPin("");setOtp("");setCvv("");setMsg(d.message||"Payment failed. Check your card details and try again.");return}
+  setAwaiting(true);setMsg(d.message||"Waiting for your bank to confirm the payment. This page checks automatically.");
  }
  async function run(fn){
-  if(busy)return;setBusy(true);setMsg("");
-  try{handle(await fn())}catch(e){setMsg(e?.message||"Payment could not be completed.")}finally{setBusy(false)}
+  if(busy||lockRef.current)return;lockRef.current=true;setBusy(true);setMsg("");
+  try{handle(await fn())}catch(e){setMsg(e?.message||"Payment could not be completed.")}finally{lockRef.current=false;if(liveRef.current)setBusy(false)}
  }
  const [mm,yy]=exp.split("/");
  const payCard=()=>run(()=>call("pay",{card:{number,expMonth:mm||"",expYear:yy||"",cvv}}).then(d=>{setCvv("");return d}));
@@ -923,6 +1000,7 @@ function Premium({user,onNotice,owner=false}){
 }
 
 function AdStudio({user,owner=false}){
+ const createdFormRef=useRef(""),submitLockRef=useRef(false);
  const [step,setStep]=useState("prep"),[status,setStatus]=useState(""),[submitting,setSubmitting]=useState(false),[confirmCfg,setConfirmCfg]=useState(null),[campaignId,setCampaignId]=useState(""),[amountDue,setAmountDue]=useState(0),[myCampaigns,setMyCampaigns]=useState([]),[loadingCampaigns,setLoadingCampaigns]=useState(false);
  const today=(()=>{const n=new Date();return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}-${String(n.getDate()).padStart(2,"0")}`})();
  const [form,setForm]=useState({promotionType:"short",brand:"",title:"",description:"",assetId:"",site:"",destinationName:"",siteIcon:"",country:"",categories:["all"],targetLocation:"all",targetImpressions:"3000",duration:"1",startDate:today});
@@ -1036,7 +1114,7 @@ function AdStudio({user,owner=false}){
  const confirmEl=confirmCfg?<ConfirmModal {...confirmCfg} onNo={()=>setConfirmCfg(null)}/>:null;
  if(step==="prep")return <section className="panel">{confirmEl}<h1>Advertise with Kivora</h1><p>Kivora uses a video-only Shorts advertising system. Choose whether you are simply promoting a Short or sending viewers to an app/site.</p><div className="steps"><div><b>1. Publish first</b> — upload your video to YouTube, set its visibility so it can be embedded, and copy the public YouTube Shorts/video URL. Kivora never accepts an uploaded video file.</div><div><b>2. Choose your promotion</b> — promote the Short alone, or promote an app/site with an HTTPS destination URL and a name/logo banner beneath the video.</div><div><b>3. Review and pay</b> — Kivora verifies the YouTube video, vertical/square format, duration and embed permission before checkout. Payment is confirmed on the server before delivery.</div><div><b>4. Track delivery</b> — qualified impressions are counted server-side after at least 2 seconds with 50%+ visibility. Clicks, spend and pacing are tracked separately from YouTube engagement.</div><div><b>Important</b> — this is Kivora placement, not a YouTube Ads campaign or a guarantee of views. YouTube controls the player, availability, and its own engagement counts.</div></div><div className="priceBox"><b>{moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)} / up to 3,000 qualified impressions</b><span>Minimum campaign: 3,000 qualified impressions. Pricing: $1 (₦1,300) per 3,000 target impressions; larger targets are billed in 3,000-impression blocks. Actual delivery depends on eligible viewers and placement availability.</span><span>One qualified impression requires at least 2 seconds at 50%+ visibility.</span></div><button className="primary" onClick={()=>setStep("form")}>{draftRestored?"Continue your draft campaign":"Create video campaign"}</button><div className="campaignList"><div className="relatedHeading"><div><small>MY CAMPAIGNS</small><h2>Expense monitor</h2></div><button onClick={refreshCampaigns} disabled={loadingCampaigns}>{loadingCampaigns?"Refreshing…":"Refresh"}</button></div>{myCampaigns.filter(c=>c.status==="pending_payment").length>0&&<button type="button" className="dangerBtn" onClick={clearUnpaid}>Remove unpaid campaigns ({myCampaigns.filter(c=>c.status==="pending_payment").length})</button>}{!myCampaigns.length?<p className="tiny">No campaigns yet. Completed campaigns will show spend, delivery and pacing here.</p>:myCampaigns.map(c=>{const target=Number(c.targetImpressions||0),delivered=Number(c.qualifiedImpressions||c.impressions||0),spend=Number(c.spend||0),remaining=Math.max(0,target-delivered);const days=Math.max(1,Number(c.durationDays||1));const daily=target?Math.ceil(target/days):0;return <div className="campaignRow" key={c.id}><div><b>{c.title||"Untitled campaign"}</b><span className={remaining===0?"campaignComplete":"campaignStatus"}>{remaining===0?"✓ Completed":(c.status||"In review")} · {c.startDate} → {c.endDate}</span></div><div><b>{delivered.toLocaleString()} / {target.toLocaleString()}</b><span>{moneyUsdNgn(spend)} spent · {moneyUsdNgn(Math.max(0,Number(c.totalBudgetUsd||0)-spend))} remaining · {Number(c.clicks||0).toLocaleString()} destination clicks</span></div>{c.status==="pending_payment"&&<div><button type="button" className="primary" onClick={()=>{setCampaignId(c.id);setAmountDue(Number(c.totalBudgetNgn)||0);setStep("pay")}}>Pay now</button></div>}{!["cancelled","completed"].includes(c.status)&&remaining>0&&<div><button type="button" className="dangerBtn" onClick={()=>cancelCampaign(c.id)}>Cancel campaign</button></div>}<div><b>{remaining.toLocaleString()}</b><span>impressions remaining · ~{daily.toLocaleString()}/day planned</span></div></div>})}</div></section>;
  if(step==="pay"&&campaignId)return <>{confirmEl}<CardPayment campaignId={campaignId} amountNgn={amountDue} onBack={()=>setStep("review")} onCancel={()=>cancelCampaign(campaignId)} onPaid={()=>{setStatus("Payment verified. Your sponsored Short is now ready for delivery.");refreshCampaigns();setCampaignId("");setAmountDue(0);setStep("prep")}}/></>;
- if(step==="review")return <section className="panel"><button onClick={()=>setStep("form")}>← Edit campaign</button><h1>Campaign & expense monitor</h1><div className="campaignMonitor"><div><small>TOTAL BUDGET</small><b>{moneyUsdNgn(estimatedBill)}</b></div><div><small>SPENT NOW</small><b>{moneyUsdNgn(0)}</b></div><div><small>REMAINING</small><b>{moneyUsdNgn(estimatedBill)}</b></div><div><small>DAILY PLAN</small><b>{moneyUsdNgn(dailyBudget)}</b></div><div><small>IMPRESSIONS/DAY</small><b>{dailyImpressions.toLocaleString()}</b></div><div><small>CAMPAIGN DAYS</small><b>{days}</b></div></div><div className="priceBox"><b>{form.promotionType==="app"?"App/site promotion":"Short promotion"}</b><span>Delivery: {startDate} → {endDate} ({days} day{days===1?"":"s"})</span><span>Target: {targetImpressions.toLocaleString()} qualified impressions</span><span>Billable: {billableImpressions.toLocaleString()} impressions</span><span>Rate: {moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)} per 3,000-impression block</span><span>Planned spend/day: {moneyUsdNgn(dailyBudget)}</span><small>Spend is derived from qualified delivery, capped at the campaign target. The monitor separates delivered spend from the remaining budget.</small></div><button className="primary" disabled={submitting} onClick={async()=>{if(submitting)return;if(campaignId&&amountDue){setStep("pay");return;}setSubmitting(true);setStatus("");try{const u=auth.currentUser;if(!u||u.isAnonymous)throw new Error("Connect Google before creating an advertising campaign.");const r=await authedFetch(apiUrl("/api/ad-campaign"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...form,durationDays:days})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||"Campaign could not be created.");setCampaignId(d.campaignId||"");clearDraft();refreshCampaigns();if(d.paymentRequired){setAmountDue(Number(d.amountNgn)||0);setStep("pay");return;}setStatus("Campaign created and ready for delivery.");}catch(e){setStatus(e?.message||"Campaign could not be created.")}finally{setSubmitting(false)}}}>{submitting?"Preparing…":campaignId?"Continue to card payment":"Continue to secure payment"}</button>{campaignId&&<button type="button" className="dangerBtn" onClick={()=>cancelCampaign(campaignId)}>Cancel campaign</button>}{status&&<div className="status">{status}</div>}</section>;
+ if(step==="review")return <section className="panel"><button onClick={()=>setStep("form")}>← Edit campaign</button><h1>Campaign & expense monitor</h1><div className="campaignMonitor"><div><small>TOTAL BUDGET</small><b>{moneyUsdNgn(estimatedBill)}</b></div><div><small>SPENT NOW</small><b>{moneyUsdNgn(0)}</b></div><div><small>REMAINING</small><b>{moneyUsdNgn(estimatedBill)}</b></div><div><small>DAILY PLAN</small><b>{moneyUsdNgn(dailyBudget)}</b></div><div><small>IMPRESSIONS/DAY</small><b>{dailyImpressions.toLocaleString()}</b></div><div><small>CAMPAIGN DAYS</small><b>{days}</b></div></div><div className="priceBox"><b>{form.promotionType==="app"?"App/site promotion":"Short promotion"}</b><span>Delivery: {startDate} → {endDate} ({days} day{days===1?"":"s"})</span><span>Target: {targetImpressions.toLocaleString()} qualified impressions</span><span>Billable: {billableImpressions.toLocaleString()} impressions</span><span>Rate: {moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)} per 3,000-impression block</span><span>Planned spend/day: {moneyUsdNgn(dailyBudget)}</span><small>Spend is derived from qualified delivery, capped at the campaign target. The monitor separates delivered spend from the remaining budget.</small></div><button className="primary" disabled={submitting} onClick={async()=>{if(submitting||submitLockRef.current)return;const formSig=JSON.stringify(form);if(campaignId&&amountDue&&createdFormRef.current===formSig){setStep("pay");return;}submitLockRef.current=true;setSubmitting(true);setStatus("");try{const u=auth.currentUser;if(!u||u.isAnonymous)throw new Error("Connect Google before creating an advertising campaign.");const r=await authedFetch(apiUrl("/api/ad-campaign"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...form,durationDays:days})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||"Campaign could not be created.");setCampaignId(d.campaignId||"");createdFormRef.current=formSig;clearDraft();refreshCampaigns();if(d.paymentRequired){setAmountDue(Number(d.amountNgn)||0);setStep("pay");return;}setStatus("Campaign created and ready for delivery.");}catch(e){setStatus(e?.message||"Campaign could not be created.")}finally{submitLockRef.current=false;setSubmitting(false)}}}>{submitting?"Preparing…":campaignId?"Continue to card payment":"Continue to secure payment"}</button>{campaignId&&<button type="button" className="dangerBtn" onClick={()=>cancelCampaign(campaignId)}>Cancel campaign</button>}{status&&<div className="status">{status}</div>}</section>;
  return <section className="panel"><button onClick={()=>setStep("prep")}>← Back</button><h1>Video campaign</h1>{draftRestored&&<div className="status draftNotice">Continuing from your saved draft. <button type="button" className="searchCancel" onClick={resetDraft}>Start over</button></div>}<form onSubmit={submit}><label>Promotion type<select value={form.promotionType} onChange={e=>update("promotionType",e.target.value)}><option value="short">Promote my Short</option><option value="app">Promote an app or site</option></select></label>{[["assetId","YouTube Shorts/video URL (already published)"],["brand","Brand / creator name"],["title","Campaign title"],["description","Description"],["targetImpressions","Target qualified impressions"],["duration","Campaign duration (days)"],["startDate","Start date"]].map(([k,l])=><label key={k}>{l}<input value={form[k]} onChange={e=>update(k,e.target.value)} type={k==="duration"||k==="targetImpressions"?"number":k==="startDate"?"date":"text"} min={k==="duration"?1:k==="targetImpressions"?3000:undefined} max={k==="duration"?90:k==="targetImpressions"?100000000:undefined} required={k!=="country"&&k!=="description"}/></label>)}<fieldset className="adCategoryPicker"><legend>Target viewer categories</legend><p className="tiny">Your sponsored Short is prioritized for viewers watching these categories. If delivery is slow, it may also appear in other categories to help complete your impression target.</p><div className="adCategoryGrid">{[["all","All categories"],["comedy","Comedy"],["tech","Tech"],["adventure","Adventure"],["science","Science"],["finance","Finance"],["education","Education"],["gaming","Gaming"],["sports","Sports"],["food","Food"],["music","Music"],["beauty","Beauty"],["new","Latest"]].map(([value,label])=><label key={value}><input type="checkbox" checked={(form.categories||["all"]).includes(value)} onChange={e=>{const old=form.categories||["all"];const next=e.target.checked?(value==="all"?["all"]:[...old.filter(x=>x!=="all"),value]):old.filter(x=>x!==value);update("categories",next.length?next:["all"]);}}/>{label}</label>)}</div></fieldset>{destinationRequired&&<div className="destinationFields"><label>App/site name shown on banner<input value={form.destinationName} onChange={e=>update("destinationName",e.target.value)} placeholder="e.g. Kivora" required/></label><label>Destination URL<input value={form.site} onChange={e=>update("site",e.target.value)} placeholder="https://example.com" inputMode="url" required/></label><label>App icon <span className="tiny">optional — pick an image, or the site favicon is used</span><span className="iconPicker"><span className="destinationIcon iconPickerPreview">{form.siteIcon?<img src={form.siteIcon} alt="App icon preview"/>:"◆"}</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={pickIcon}/>{form.siteIcon&&<button type="button" className="searchCancel" onClick={()=>update("siteIcon","")}>Remove</button>}</span></label><div className="destinationPreview"><span>LINK PREVIEW</span><div><span className="destinationIcon">{form.siteIcon?<img src={form.siteIcon} alt=""/>:"◆"}</span><strong>{form.destinationName||"Your app/site"}</strong><small>{form.site||"https://example.com"}</small><b>Open ↗</b></div></div></div>}<div className="priceBox"><span>Rate <b>{owner?"$0.00 (₦0) — owner billing bypass":moneyUsdNgn(VIDEO_PRICE_PER_BLOCK)+" / up to 3,000 qualified impressions"}</b></span><span>Billable target <b>{billableImpressions.toLocaleString()}</b></span><span>Estimated bill <b>{moneyUsdNgn(estimatedBill)}</b></span><span>Daily pacing <b>{dailyImpressions.toLocaleString()} impressions/day · {moneyUsdNgn(dailyBudget)}/day</b></span><span>Delivery window <b>{startDate} → {endDate}</b></span><small>{destinationRequired?"The app/site banner will appear directly beneath the sponsored video and link to the supplied destination.":"No destination link is required for Short-only promotion."}</small></div><button className="primary" disabled={submitting}>{submitting?"Checking…":"Review campaign & expenses"}</button></form>{status&&<div className="status">{status}</div>}</section>
 }
 
@@ -1075,7 +1153,7 @@ function Legal({page}){
  }[page];
  return <section className="panel legal"><small>KIVORA INFORMATION</small><h1>{content[0]}</h1><p>{content[1]}</p><p>{content[2]}</p><div className="noticeBox"><b>Source principle</b><p>Kivora's role is discovery and presentation—not ownership of third-party audiovisual works.</p></div></section>
 }
-function authMessage(e){const c=e?.code; if(c==="auth/credential-already-in-use"||c==="auth/account-exists-with-different-credential") return "This Google account already has a Kivora account. Signing you into that existing account instead."; if(c==="auth/popup-blocked") return "Google sign-in was blocked by the browser. Kivora will use the secure redirect sign-in instead."; return e?.message||"Sign-in could not be completed."}
+function authMessage(e){const c=e?.code; const raw=String(e?.message||""); if(c==="auth/popup-closed-by-user"||c==="auth/cancelled-popup-request") return ""; if(c==="auth/network-request-failed") return "No connection. Check your internet and try Google sign-in again."; if(c==="auth/too-many-requests") return "Too many sign-in attempts. Wait a minute and try again."; if(c==="auth/user-disabled") return "This Google account has been disabled for Kivora."; if(/DEVELOPER_ERROR|\b10:|statusCode=10/i.test(raw)) return "Google sign-in is not set up for this app build yet (the Android SHA-1 or google-services.json is missing). See ANDROID_LOGIN.md."; if(/\b12500\b|\b12501\b/.test(raw)) return /12501/.test(raw)?"":"Google sign-in could not start. Update Google Play services and try again."; if(c==="auth/credential-already-in-use"||c==="auth/account-exists-with-different-credential") return "This Google account already has a Kivora account. Signing you into that existing account instead."; if(c==="auth/popup-blocked") return "Google sign-in was blocked by the browser. Kivora will use the secure redirect sign-in instead."; return e?.message||"Sign-in could not be completed."}
 
 class StartupErrorBoundary extends React.Component {
  constructor(props){ super(props); this.state={failed:false,errorMessage:"",componentStack:""}; }

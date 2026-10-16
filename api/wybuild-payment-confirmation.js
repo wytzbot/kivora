@@ -2,6 +2,7 @@
 // Configure this endpoint in WyBuild as KIVORA_PAYMENT_CONFIRM_URL.
 import { timingSafeEqual } from 'node:crypto';
 import { adminDb } from '../functions/server-auth.js';
+import { FieldValue } from 'firebase-admin/firestore';
 
 function secretMatches(received, expected) {
   if (!received || !expected) return false;
@@ -32,7 +33,9 @@ export default async function handler(req, res) {
       return res.status(200).json({ received: true, verified: false });
     }
     const db = adminDb();
-    const matches = await db.collection('campaigns').where('paymentReference', '==', reference).limit(1).get();
+    let matches = await db.collection('campaigns').where('paymentReference', '==', reference).limit(1).get();
+    // The card form can be retried, so the reference of an earlier (late-confirmed) attempt is looked up too.
+    if (matches.empty) matches = await db.collection('campaigns').where('paymentReferences', 'array-contains', reference).limit(1).get();
     if (matches.empty) return res.status(404).json({ error: 'No campaign matches this payment reference.' });
     const doc = matches.docs[0];
     const campaign = doc.data() || {};
@@ -60,9 +63,12 @@ export default async function handler(req, res) {
         return 'alreadyProcessed';
       }
       if (fresh.paymentStatus === 'verified' && fresh.paymentTransactionId && fresh.paymentTransactionId !== transactionId) {
-        throw new Error('Campaign has already been paid with a different transaction.');
+        // A second successful charge for an already-paid campaign. Answer 200 so Flutterwave stops retrying, and flag it for refund.
+        tx.update(doc.ref, { duplicatePaymentChargeIds: FieldValue.arrayUnion(transactionId), refundReview: true, updatedAt: now });
+        return 'duplicate';
       }
-      if (Number(fresh.totalBudgetNgn) !== amount || String(fresh.currency || 'NGN').toUpperCase() !== currency || String(fresh.paymentReference || '') !== reference) {
+      const knownReference = String(fresh.paymentReference || '') === reference || (Array.isArray(fresh.paymentReferences) && fresh.paymentReferences.includes(reference));
+      if (Number(fresh.totalBudgetNgn) !== amount || String(fresh.currency || 'NGN').toUpperCase() !== currency || !knownReference) {
         throw new Error('Verified charge no longer matches the campaign payment details.');
       }
       if (existingPayment.exists) {
@@ -78,11 +84,14 @@ export default async function handler(req, res) {
           createdAt: now,
         });
       }
-      tx.update(doc.ref, {
-        paymentStatus: 'verified', status: 'ready', paymentTransactionId: transactionId,
+      const paid = {
+        paymentStatus: 'verified', paymentTransactionId: transactionId, paymentReference: reference,
         paidAmount: amount, paymentVerifiedBy: 'wybuild-flutterwave-v4-webhook',
-        paymentVerifiedAt: now, updatedAt: now,
-      });
+        paymentVerifiedAt: now, paymentInFlightUntil: 0, updatedAt: now,
+      };
+      // Paid after the advertiser cancelled: do not serve it, but record that money is owed back.
+      if (fresh.status === 'cancelled') tx.update(doc.ref, { ...paid, refundRequired: true });
+      else tx.update(doc.ref, { ...paid, status: 'ready' });
       return 'verified';
     });
     return res.status(200).json({ received: true, verified: true, alreadyProcessed: outcome === 'alreadyProcessed', campaignId: doc.id });

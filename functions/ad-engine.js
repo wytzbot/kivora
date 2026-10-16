@@ -124,3 +124,19 @@ export function updateAdMonitor(campaign, event = {}) {
   }
   return next;
 }
+
+// Delivery window. Dates are advertiser-local calendar days (default Nigeria, UTC+1; override with KIVORA_TZ_OFFSET_HOURS).
+// A campaign is only served from its start date through the end of its end date.
+export function todayInCampaignZone(now = new Date()) {
+  const offset = Number(process.env.KIVORA_TZ_OFFSET_HOURS ?? 1);
+  return new Date(new Date(now).getTime() + (Number.isFinite(offset) ? offset : 1) * 3600000).toISOString().slice(0, 10);
+}
+
+export function isWithinFlight(campaign = {}, now = new Date()) {
+  const today = todayInCampaignZone(now);
+  const start = String(campaign.startDate || '').slice(0, 10);
+  const end = String(campaign.endDate || '').slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(start) && today < start) return false;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(end) && today > end) return false;
+  return true;
+}

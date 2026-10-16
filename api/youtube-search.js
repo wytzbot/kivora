@@ -134,10 +134,16 @@ export default async function handler(req, res) {
   // costs 100 quota units per call. Category terms are chosen deterministically;
   // the next page token continues the same query without multiplying quota use.
   const categoryTerms = industryQueries(category);
+  // YouTube returns the same top results for the same search phrase, which is why a restarted app kept being offered the
+  // same videos. The client sends a "variant" that changes on every app launch / refresh; it rotates which of the
+  // category's search phrases is used (same quota cost), so each fresh feed starts from a different pool of videos.
+  // Page tokens belong to one phrase, so the client keeps the same variant while it pages.
+  const rawVariant = Array.isArray(req.query?.variant) ? req.query.variant[0] : req.query?.variant;
+  const variant = Math.abs(Number.parseInt(rawVariant, 10) || 0);
   const queries = [
     q
       ? `${q} -recap -explained -review -reaction -trailer`
-      : categoryTerms[0]
+      : categoryTerms[variant % categoryTerms.length]
   ];
 
   const pageTokens = queries.map((_, i) => {

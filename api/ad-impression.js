@@ -1,5 +1,11 @@
 import { adminDb, optionalUser } from '../functions/server-auth.js';
-import { calculateDeliveredSpend, updateAdMonitor, qualifiesVideoImpression } from '../functions/ad-engine.js';
+import { calculateDeliveredSpend, updateAdMonitor, qualifiesVideoImpression, isWithinFlight } from '../functions/ad-engine.js';
+import { createHash } from 'node:crypto';
+
+// One billable impression per viewer per campaign per window. The viewer is the verified Firebase user (or, for a signed-out
+// request, the device id / network address). The client's own impressionKey can no longer be varied to count the same
+// person twice, and a refresh, app restart or re-mounted card cannot double count.
+const FREQUENCY_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 function cleanId(v){return String(v||'').trim().replace(/[^A-Za-z0-9_-]/g,'').slice(0,128)}
 function fail(res,e){return res.status(e?.statusCode||400).json({error:e?.message||'Request failed.'})}
@@ -18,23 +24,29 @@ export default async function handler(req,res){
     const source=body.source==='drive'?'drive':'youtube';
     const impressionKey=cleanId(body.impressionKey);
     const viewerKey=cleanId(body.viewerKey || 'anonymous');
+    const deviceId=cleanId(body.deviceId);
+    const forwarded=String(req.headers?.['x-forwarded-for']||'').split(',')[0].trim();
+    const viewerIdentity=user?.uid?`u:${user.uid}`:(deviceId?`d:${deviceId}`:`ip:${forwarded||req.socket?.remoteAddress||'unknown'}`);
+    const windowBucket=Math.floor(Date.now()/FREQUENCY_WINDOW_MS);
     if(!campaignId||!impressionKey) return res.status(400).json({error:'campaignId and impressionKey are required.'});
     if(!Number.isFinite(secondsViewed)||secondsViewed<0||!Number.isFinite(visibleRatio)||visibleRatio<0||visibleRatio>1) return res.status(400).json({error:'Invalid viewability data.'});
     const db=adminDb();
     const campaignRef=db.collection('campaigns').doc(campaignId);
-    const eventRef=campaignRef.collection('impressionEvents').doc(impressionKey);
+    const eventId=createHash('sha256').update(`${campaignId}|${viewerIdentity}|${windowBucket}`).digest('hex').slice(0,40);
+    const eventRef=campaignRef.collection('impressionEvents').doc(eventId);
     const result=await db.runTransaction(async tx=>{
       const [campaignSnap,eventSnap]=await Promise.all([tx.get(campaignRef),tx.get(eventRef)]);
       if(!campaignSnap.exists) throw Object.assign(new Error('Campaign not found.'),{statusCode:404});
       const campaign=campaignSnap.data()||{};
       if(user?.uid && campaign.advertiserId===user.uid) return {qualified:false,reason:'advertiser_view_not_billable'};
       if(campaign.status!=='ready'||campaign.paymentStatus!=='verified'||campaign.moderationStatus!=='approved'||campaign.assetStatus!=='verified') return {qualified:false,reason:'campaign_not_active'};
+      if(!isWithinFlight(campaign)) return {qualified:false,reason:'outside_campaign_dates'};
       if(eventSnap.exists) return {qualified:false,reason:'already_counted'};
       const target=Math.max(0,Number(campaign.targetImpressions||0));
       if(target && Number(campaign.qualifiedImpressions||campaign.impressions||0)>=target) return {qualified:false,reason:'target_reached'};
       if(!qualifiesVideoImpression({secondsViewed,visibleRatio,alreadyCounted:false})) return {qualified:false,reason:'viewability_threshold_not_met'};
       const monitor=updateAdMonitor(campaign,{qualifiedImpressions:1,now:new Date().toISOString()});
-      tx.set(eventRef,{userId:user?.uid||null,viewerKey,source,secondsViewed,visibleRatio,createdAt:new Date().toISOString()});
+      tx.set(eventRef,{userId:user?.uid||null,viewerKey,impressionKey,source,secondsViewed,visibleRatio,createdAt:new Date().toISOString()});
       const completed=monitor.monitorStatus==='impression_target_reached';
       const now=new Date();
       tx.update(campaignRef,{

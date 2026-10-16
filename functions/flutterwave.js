@@ -47,7 +47,7 @@ class PaymentError extends Error {
   constructor(message, status = 400) { super(message); this.statusCode = status; }
 }
 
-async function apiRequest(path, options = {}) {
+async function apiRequest(path, options = {}, idempotencyKey = '') {
   const token = await accessToken();
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
@@ -56,7 +56,8 @@ async function apiRequest(path, options = {}) {
       'Content-Type': 'application/json',
       Accept: 'application/json',
       'X-Trace-Id': randomUUID(),
-      'X-Idempotency-Key': randomUUID(),
+      // A stable key per payment attempt means a network retry or double tap can never create a second charge.
+      'X-Idempotency-Key': String(idempotencyKey || randomUUID()).slice(0, 255),
       ...(options.headers || {})
     }
   });
@@ -147,7 +148,7 @@ export function nextStep(charge = {}) {
   return { step: 'pending', message: 'Waiting for the bank to confirm the payment.' };
 }
 
-export async function createCardCharge({ email, name, reference, amountNgn, redirectUrl, card }) {
+export async function createCardCharge({ email, name, reference, amountNgn, redirectUrl, card, idempotencyKey }) {
   const amount = Math.round(Number(amountNgn));
   if (!Number.isFinite(amount) || amount < 1) throw new PaymentError('Invalid payment amount.');
   const c = cleanCard(card);
@@ -172,13 +173,13 @@ export async function createCardCharge({ email, name, reference, amountNgn, redi
         }
       }
     })
-  });
+  }, idempotencyKey || reference);
   const charge = data?.data || data;
   if (!charge?.id) throw new PaymentError('Flutterwave did not return a charge. Please try again.', 502);
   return { chargeId: String(charge.id), charge };
 }
 
-export async function authorizeCharge({ chargeId, type, pin, code }) {
+export async function authorizeCharge({ chargeId, type, pin, code, idempotencyKey }) {
   const id = encodeURIComponent(String(chargeId));
   let authorization;
   if (type === 'pin') {
@@ -191,7 +192,7 @@ export async function authorizeCharge({ chargeId, type, pin, code }) {
   } else {
     throw new PaymentError('Unsupported authorization step.');
   }
-  const data = await apiRequest(`/charges/${id}`, { method: 'PUT', body: JSON.stringify({ authorization }) });
+  const data = await apiRequest(`/charges/${id}`, { method: 'PUT', body: JSON.stringify({ authorization }) }, idempotencyKey);
   return data?.data || data;
 }
 
@@ -209,6 +210,6 @@ export async function verifyCharge({ chargeId, expectedReference, expectedAmount
   const currency = String(d?.currency || '');
   const amount = Number(d?.amount || 0);
   const success = status === 'succeeded' && reference === String(expectedReference || '') &&
-    currency === expectedCurrency && amount === Number(expectedAmount || 0);
+    currency === expectedCurrency && Math.abs(amount - Number(expectedAmount || 0)) < 0.01;
   return { success, status, amount, currency, reference, charge: d };
 }
