@@ -15,7 +15,7 @@ import {
 
 const firebaseConfig = {
   apiKey:"AIzaSyCSnUww6XmaNkdrDEnwpzZIWQHz2SW58sI",
-  authDomain:(isAppShell&&typeof window!=="undefined"&&window.location.hostname&&window.location.hostname!=="localhost")?window.location.hostname:"kivoraa.firebaseapp.com", projectId:"kivoraa",
+  authDomain:"kivoraa.firebaseapp.com", projectId:"kivoraa",
   storageBucket:"kivoraa.firebasestorage.app", messagingSenderId:"739770885881",
   appId:"1:739770885881:web:3a17f6eab7e6c4b0612428", measurementId:"G-1W86Q64XKQ"
 };
