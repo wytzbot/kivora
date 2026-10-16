@@ -2,7 +2,7 @@ import { adminDb, requireUser } from '../functions/server-auth.js';
 import { calculateBillForUser, validatePromotion, MAX_TARGET_IMPRESSIONS, IMPRESSION_BLOCK_SIZE, MIN_TARGET_IMPRESSIONS, USD_TO_NGN_RATE } from '../functions/ad-engine.js';
 import { validateAsset } from '../functions/moderation.js';
 import { createCardCharge, authorizeCharge, verifyCharge, nextStep, newReference } from '../functions/flutterwave.js';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 
 const YOUTUBE_ID=/^[A-Za-z0-9_-]{6,}$/;
 const YOUTUBE_URL=/^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/)[A-Za-z0-9_-]{6,}/i;
@@ -44,6 +44,14 @@ function cleanIcon(value){
   return '';
 }
 
+async function cancelUnpaid(req,res){
+  const user=await requireUser(req); const db=adminDb();
+  const snap=await db.collection('campaigns').where('advertiserId','==',user.uid).where('status','==','pending_payment').get();
+  const now=new Date().toISOString(); const batch=db.batch(); const ids=[];
+  snap.docs.forEach(d=>{const c=d.data()||{};if(c.paymentStatus!=='verified'){batch.update(d.ref,{status:'cancelled',cancelledAt:now,cancelledBy:user.uid,cancelReason:'unpaid_cleared',statusBeforeCancel:'pending_payment',updatedAt:now});ids.push(d.id)}});
+  if(ids.length)await batch.commit();
+  return {cancelled:ids};
+}
 async function cancelCampaign(req,res){
   const user=await requireUser(req); const id=String((req.body||{}).campaignId||'').trim();
   if(!id) throw new Error('campaignId is required.');
@@ -80,12 +88,24 @@ async function createCampaign(req,res){
   if(!validateAsset('video',String(b.assetId||''))) throw new Error('Invalid sponsored video source.');
   const asset=await verifyAsset(b.assetId);
   const bill=calculateBillForUser({targetImpressions:target,authenticatedEmail:user.email,format:'video'});
+    // Idempotency: the same unpaid campaign request must never create a second campaign (retries, double taps, failed payments).
+  const fingerprint=createHash('sha256').update(JSON.stringify([user.uid,Object.keys(b).sort().map(k=>[k,b[k]])])).digest('hex');
+  const db0=adminDb();
+  const dup=await db0.collection('campaigns').where('advertiserId','==',user.uid).where('fingerprint','==',fingerprint).where('status','==','pending_payment').limit(1).get();
+  if(!dup.empty&&!bill.ownerBillingBypass){const d=dup.docs[0].data()||{};return res.status(200).json({campaignId:dup.docs[0].id,paymentRequired:true,amountNgn:d.totalBudgetNgn||bill.totalNgn,currency:'NGN',reused:true})}
   const id=randomUUID();
   const end=new Date(`${startDate}T00:00:00Z`); end.setUTCDate(end.getUTCDate()+duration-1);
   const campaign={
-    advertiserId:user.uid,advertiserEmail:user.email||'',promotionType,targetCategories:Array.isArray(b.categories)?[...new Set(b.categories.map(x=>String(x).toLowerCase()).filter(x=>['all','comedy','tech','adventure','science','finance','education','gaming','sports','food','music','beauty','new'].includes(x)))].slice(0,13):['all'],targetLocation:['all','country','city'].includes(String(b.targetLocation||'all'))?String(b.targetLocation||'all'):'all',targetRegion:String(b.targetLocationValue||b.country||'').trim().slice(0,100),format:'video',brand:String(b.brand).trim().slice(0,120),title:String(b.title).trim().slice(0,160),description:String(b.description||'').trim().slice(0,500),country:String(b.country||'NG').trim().slice(0,10),assetId:asset.assetId,assetSource:asset.source,durationSeconds:asset.durationSeconds||null,embedWidth:asset.embedWidth||null,embedHeight:asset.embedHeight||null,publishedAt:asset.publishedAt||null,site:promotionType==='app'?String(b.site).trim():null,destinationName:promotionType==='app'?String(b.destinationName).trim().slice(0,80):null,siteIcon:promotionType==='app'?cleanIcon(b.siteIcon):null,targetImpressions:target,billableImpressions:bill.billableImpressions,totalBudgetUsd:bill.total,totalBudgetNgn:bill.totalNgn,currency:'NGN',usdNgnRate:USD_TO_NGN_RATE,durationDays:duration,startDate,endDate:end.toISOString().slice(0,10),qualifiedImpressions:0,impressions:0,clicks:0,spend:0,status:bill.ownerBillingBypass?'ready':'pending_payment',paymentStatus:bill.ownerBillingBypass?'verified':'pending',moderationStatus:'approved',assetStatus:'verified',preflightStatus:'passed',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()
+    fingerprint,advertiserId:user.uid,advertiserEmail:user.email||'',promotionType,targetCategories:Array.isArray(b.categories)?[...new Set(b.categories.map(x=>String(x).toLowerCase()).filter(x=>['all','comedy','tech','adventure','science','finance','education','gaming','sports','food','music','beauty','new'].includes(x)))].slice(0,13):['all'],targetLocation:['all','country','city'].includes(String(b.targetLocation||'all'))?String(b.targetLocation||'all'):'all',targetRegion:String(b.targetLocationValue||b.country||'').trim().slice(0,100),format:'video',brand:String(b.brand).trim().slice(0,120),title:String(b.title).trim().slice(0,160),description:String(b.description||'').trim().slice(0,500),country:String(b.country||'NG').trim().slice(0,10),assetId:asset.assetId,assetSource:asset.source,durationSeconds:asset.durationSeconds||null,embedWidth:asset.embedWidth||null,embedHeight:asset.embedHeight||null,publishedAt:asset.publishedAt||null,site:promotionType==='app'?String(b.site).trim():null,destinationName:promotionType==='app'?String(b.destinationName).trim().slice(0,80):null,siteIcon:promotionType==='app'?cleanIcon(b.siteIcon):null,targetImpressions:target,billableImpressions:bill.billableImpressions,totalBudgetUsd:bill.total,totalBudgetNgn:bill.totalNgn,currency:'NGN',usdNgnRate:USD_TO_NGN_RATE,durationDays:duration,startDate,endDate:end.toISOString().slice(0,10),qualifiedImpressions:0,impressions:0,clicks:0,spend:0,status:bill.ownerBillingBypass?'ready':'pending_payment',paymentStatus:bill.ownerBillingBypass?'verified':'pending',moderationStatus:'approved',assetStatus:'verified',preflightStatus:'passed',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()
   };
   const db=adminDb(); await db.collection('campaigns').doc(id).set(campaign);
+  if(!bill.ownerBillingBypass){
+    // Abandoned unpaid drafts (never charged) are cancelled so they do not pile up.
+    const stale=await db.collection('campaigns').where('advertiserId','==',user.uid).where('status','==','pending_payment').get();
+    const now=new Date().toISOString(); const batch=db.batch(); let n=0;
+    stale.docs.forEach(d=>{const c=d.data()||{};if(d.id!==id&&!c.paymentChargeId&&c.paymentStatus!=='verified'){batch.update(d.ref,{status:'cancelled',cancelledAt:now,cancelledBy:user.uid,cancelReason:'superseded_unpaid',statusBeforeCancel:'pending_payment',updatedAt:now});n++}});
+    if(n)await batch.commit();
+  }
   if(bill.ownerBillingBypass) return res.status(200).json({campaignId:id,paymentRequired:false,campaign});
   return res.status(200).json({campaignId:id,paymentRequired:true,amountNgn:bill.totalNgn,currency:'NGN'});
 }
@@ -158,4 +178,4 @@ async function verifyPayment(req,res){
 export default async function handler(req,res){
   res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('Access-Control-Allow-Methods','GET,POST,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');
   if(req.method==='OPTIONS') return res.status(204).end();
-res.setHeader('Content-Type','application/json; charset=utf-8');try{if(req.method!=='POST')return res.status(405).json({error:'Method not allowed.'});if(req.query?.action==='pay')return await payCampaign(req,res);if(req.query?.action==='authorize')return await authorizePayment(req,res);if(req.query?.action==='verify')return await verifyPayment(req,res);if(req.query?.action==='cancel')return await cancelCampaign(req,res);return await createCampaign(req,res)}catch(e){return res.status(e?.statusCode||400).json({error:e?.message||'Campaign request failed.'})}}
+res.setHeader('Content-Type','application/json; charset=utf-8');try{if(req.method!=='POST')return res.status(405).json({error:'Method not allowed.'});if(req.query?.action==='pay')return await payCampaign(req,res);if(req.query?.action==='authorize')return await authorizePayment(req,res);if(req.query?.action==='verify')return await verifyPayment(req,res);if(req.query?.action==='cancel-unpaid')return res.status(200).json(await cancelUnpaid(req,res));if(req.query?.action==='cancel')return await cancelCampaign(req,res);return await createCampaign(req,res)}catch(e){return res.status(e?.statusCode||400).json({error:e?.message||'Campaign request failed.'})}}

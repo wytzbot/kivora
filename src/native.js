@@ -25,3 +25,16 @@ export async function openExternal(url) {
     window.location.href = url;
   }
 }
+
+// True when running as an installed app without Capacitor: a Trusted Web Activity APK or a standalone PWA.
+// Popups and normal navigation leave such an app, so sign-in must use the same-window redirect flow there.
+export const isAppShell = (() => {
+  if (typeof window === "undefined" || isNative) return false;
+  try {
+    if (sessionStorage.getItem("kivora-app-shell") === "1") return true;
+    const standalone = ["standalone", "fullscreen", "minimal-ui"].some(m => window.matchMedia?.(`(display-mode: ${m})`).matches) || window.navigator.standalone === true;
+    const fromAndroidApp = String(document.referrer || "").startsWith("android-app://");
+    if (standalone || fromAndroidApp) { sessionStorage.setItem("kivora-app-shell", "1"); return true; }
+  } catch {}
+  return false;
+})();

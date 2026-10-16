@@ -875,3 +875,6 @@ html body .app:has(.shortCard)>.topbar .inlineSearchBar{pointer-events:auto}
 
 /* Card payment (Flutterwave v4) */
 .cardPay .cardForm{display:grid;gap:14px;margin:18px 0}.cardPay .cardRow{display:grid;grid-template-columns:1fr 1fr;gap:12px}.cardPay input{width:100%;letter-spacing:.06em}.cardPay>button{margin-top:10px;width:100%}
+
+/* In-app Yes/No confirmation (window.confirm is blocked in many APK wrappers) */
+.confirmBack{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px}.confirmBox{background:#fff;color:#111;border-radius:20px;padding:22px;max-width:380px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.35)}.confirmBox h2{margin:0 0 8px}.confirmBox p{margin:0 0 18px;line-height:1.45}.confirmBtns{display:grid;grid-template-columns:1fr 1fr;gap:10px}

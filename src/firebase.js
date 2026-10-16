@@ -1,11 +1,11 @@
 import { initializeApp } from "firebase/app";
 import { KIVORA_OWNER_EMAIL } from "./access.js";
-import { isNative } from "./native.js";
+import { isNative, isAppShell } from "./native.js";
 import { getAnalytics, isSupported } from "firebase/analytics";
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
   getRedirectResult, signInAnonymously, onAuthStateChanged, signInWithCredential,
-  linkWithPopup, linkWithRedirect, reauthenticateWithPopup, signOut
+  linkWithPopup, linkWithRedirect, reauthenticateWithPopup, reauthenticateWithRedirect, signOut
 } from "firebase/auth";
 import {
   getFirestore, collection, doc, getDoc, setDoc, addDoc, updateDoc,
@@ -15,7 +15,7 @@ import {
 
 const firebaseConfig = {
   apiKey:"AIzaSyCSnUww6XmaNkdrDEnwpzZIWQHz2SW58sI",
-  authDomain:"kivoraa.firebaseapp.com", projectId:"kivoraa",
+  authDomain:(isAppShell&&typeof window!=="undefined"&&/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(window.location.hostname))?window.location.hostname:"kivoraa.firebaseapp.com", projectId:"kivoraa",
   storageBucket:"kivoraa.firebasestorage.app", messagingSenderId:"739770885881",
   appId:"1:739770885881:web:3a17f6eab7e6c4b0612428", measurementId:"G-1W86Q64XKQ"
 };
@@ -27,8 +27,14 @@ googleProvider.setCustomParameters({prompt:"select_account"});
 
 if(typeof window!=="undefined") isSupported().then(ok=>ok&&getAnalytics(app)).catch(()=>{});
 
+const YOUTUBE_SCOPES=["https://www.googleapis.com/auth/youtube.force-ssl","https://www.googleapis.com/auth/youtube.readonly"];
 export async function finishGoogleRedirect(){
-  try { return await getRedirectResult(auth); } catch(e) {
+  try {
+    const result=await getRedirectResult(auth);
+    const token=result?GoogleAuthProvider.credentialFromResult(result)?.accessToken:null;
+    if(token) sessionStorage.setItem("kivora-youtube-access-token",token);
+    return result;
+  } catch(e) {
     if(e?.code === "auth/popup-closed-by-user") return null;
     // A redirect that started by linking an anonymous account can finish with
     // credential-already-in-use when the selected Google account already has
@@ -51,12 +57,23 @@ export async function signInWithGoogle(){
   // Use the native Google account picker, then hand the credential to the web SDK.
   if(isNative){
     const { FirebaseAuthentication } = await import("@capacitor-firebase/authentication");
-    const result = await FirebaseAuthentication.signInWithGoogle();
+    let result;
+    try { result = await FirebaseAuthentication.signInWithGoogle({ scopes: YOUTUBE_SCOPES }); }
+    catch(e) {
+      // User closed the picker, or scope consent failed: fall back to plain sign-in so login still works.
+      if(/cancel/i.test(String(e?.message||e?.code||""))) throw Object.assign(new Error("Sign-in cancelled."),{code:"auth/popup-closed-by-user"});
+      result = await FirebaseAuthentication.signInWithGoogle();
+    }
     const idToken = result?.credential?.idToken;
     if(!idToken) throw Object.assign(new Error("Google sign-in did not return a credential."),{code:"auth/invalid-credential"});
     const credential = GoogleAuthProvider.credential(idToken, result?.credential?.accessToken);
     if(result?.credential?.accessToken) sessionStorage.setItem("kivora-youtube-access-token",result.credential.accessToken);
     return (await signInWithCredential(auth, credential)).user;
+  }
+  // Installed app (TWA / standalone PWA): a popup would open outside the app. Use the same-window redirect;
+  // finishGoogleRedirect() completes it when the app reloads.
+  if(isAppShell){
+    await signInWithRedirect(auth,googleProvider); return null;
   }
   // Do not link an anonymous Firebase user to Google here. If that Google
   // account already exists, Firebase can return auth/credential-already-in-use
@@ -87,11 +104,21 @@ export async function getYouTubeAccessToken(){
   if(cached) return cached;
   const user=auth.currentUser;
   if(!user||user.isAnonymous) throw new Error("Sign in with Google to use YouTube actions.");
-  if(isNative) throw new Error("YouTube action authorization must be refreshed in the web sign-in flow. Open Kivora in Chrome and sign in with Google again.");
+  if(isNative){
+    const { FirebaseAuthentication } = await import("@capacitor-firebase/authentication");
+    const result = await FirebaseAuthentication.signInWithGoogle({ scopes: YOUTUBE_SCOPES });
+    const token = result?.credential?.accessToken;
+    if(!token) throw new Error("Google did not return a YouTube access token. Sign in again from the menu.");
+    sessionStorage.setItem("kivora-youtube-access-token",token);
+    return token;
+  }
   const provider=new GoogleAuthProvider();
   provider.setCustomParameters({prompt:"consent select_account"});
-  provider.addScope("https://www.googleapis.com/auth/youtube.force-ssl");
-  provider.addScope("https://www.googleapis.com/auth/youtube.readonly");
+  YOUTUBE_SCOPES.forEach(sc=>provider.addScope(sc));
+  if(isAppShell){
+    await reauthenticateWithRedirect(user,provider);
+    throw new Error("Opening Google to authorize YouTube actions…");
+  }
   const result=await reauthenticateWithPopup(user,provider);
   const credential=GoogleAuthProvider.credentialFromResult(result);
   if(!credential?.accessToken) throw new Error("Google did not return a YouTube access token. Check OAuth consent and authorized domains.");
