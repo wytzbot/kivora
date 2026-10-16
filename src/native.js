@@ -26,16 +26,23 @@ export async function openExternal(url) {
   }
 }
 
-// True only for an installed PWA on iOS (navigator.standalone) where popups are blocked.
-// TWA APKs run inside real Chrome and handle popups fine, so they are NOT treated as app shells.
-// A TWA is identified by an android-app:// referrer.
+// Detect TWA or installed PWA — both need the same-window redirect flow because
+// window.open() opens Chrome OUTSIDE the app and never returns.
+// We persist the flag in sessionStorage so it survives the auth redirect round-trip.
 export const isAppShell = (() => {
   if (typeof window === "undefined" || isNative) return false;
   try {
-    const fromAndroidApp = String(document.referrer || "").startsWith("android-app://");
-    if (fromAndroidApp) return false; // TWA: use popup, not redirect
-    // iOS standalone PWA: popups open Safari and lose the session
-    if (window.navigator.standalone === true) return true;
+    if (sessionStorage.getItem("kivora-app-shell") === "1") return true;
+    // TWA sets an android-app:// referrer on the very first load
+    const fromTWA = String(document.referrer || "").startsWith("android-app://");
+    // Both TWA and installed PWA match standalone/fullscreen display-mode
+    const isStandalone = ["standalone", "fullscreen", "minimal-ui"].some(
+      m => window.matchMedia?.(`(display-mode: ${m})`).matches
+    ) || window.navigator.standalone === true;
+    if (fromTWA || isStandalone) {
+      sessionStorage.setItem("kivora-app-shell", "1");
+      return true;
+    }
   } catch {}
   return false;
 })();

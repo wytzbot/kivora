@@ -185,7 +185,13 @@ function App(){
  useEffect(()=>{let live=true;getProEntitlement(user).then(v=>{if(live)setPremium(v)});return()=>{live=false}},[user]);
  useEffect(()=>{
    const off=onAuthStateChanged(auth,u=>{setUser(u);setAuthReady(true)});
-   finishGoogleRedirect().then(r=>r?.user&&setNotice("Google sign-in complete.")).catch(e=>setNotice(authMessage(e)));
+   finishGoogleRedirect().then(r=>{
+      if(r?.user){setUser(r.user);setNotice("Signed in as "+r.user.displayName?.split(" ")[0]+".");}
+    }).catch(e=>{
+      // Ignore no-redirect-result (user landed normally, not from a sign-in redirect)
+      if(e?.code==="auth/no-auth-event"||e?.code==="auth/null-user") return;
+      setNotice(authMessage(e));
+    });
    return off;
  },[]);
  // Feed top bar: hide while swiping up to the next Short, reveal again when swiping back down.
