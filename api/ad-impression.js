@@ -35,7 +35,19 @@ export default async function handler(req,res){
       if(!qualifiesVideoImpression({secondsViewed,visibleRatio,alreadyCounted:false})) return {qualified:false,reason:'viewability_threshold_not_met'};
       const monitor=updateAdMonitor(campaign,{qualifiedImpressions:1,now:new Date().toISOString()});
       tx.set(eventRef,{userId:user?.uid||null,viewerKey,source,secondsViewed,visibleRatio,createdAt:new Date().toISOString()});
-      tx.update(campaignRef,{...monitor,lastQualifiedImpressionAt:new Date().toISOString(),status:monitor.monitorStatus==='impression_target_reached'?'completed':'ready'});
+      const completed=monitor.monitorStatus==='impression_target_reached';
+      const now=new Date();
+      tx.update(campaignRef,{
+        ...monitor,
+        lastQualifiedImpressionAt:now.toISOString(),
+        status:completed?'completed':'ready',
+        ...(completed ? {
+          completedAt: now,
+          // Firestore TTL uses this timestamp to remove completed campaign records
+          // five days after completion. Enable TTL on campaigns.expiresAt in Firebase.
+          expiresAt: new Date(now.getTime()+5*24*60*60*1000)
+        } : {})
+      });
       return {qualified:true,spend:calculateDeliveredSpend(monitor.billableImpressions),remainingImpressions:monitor.remainingImpressions,monitor};
     });
     return res.status(200).json(result);
