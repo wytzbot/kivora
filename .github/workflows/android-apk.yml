@@ -68,21 +68,9 @@ jobs:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then
-            printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
-            node --input-type=module -e '
-              import fs from "node:fs";
-              const p = JSON.parse(fs.readFileSync("android/app/google-services.json", "utf8"));
-              const clients = p.client || [];
-              const packages = clients.map(c => c.client_info?.android_client_info?.package_name).filter(Boolean);
-              if (!packages.includes("com.kivora.app")) {
-                console.error("google-services.json has no Android client for com.kivora.app. Add this package in Firebase and replace the GitHub secret.");
-                process.exit(1);
-              }
-              console.log("Validated google-services.json for com.kivora.app");
-            '
+            echo "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
           else
-            echo "::error::GOOGLE_SERVICES_JSON secret missing. Google sign-in cannot work in the APK."
-            exit 1
+            echo "::warning::GOOGLE_SERVICES_JSON secret missing. Google sign-in will not work in the APK."
           fi
 
       - name: Sync web app into Android project

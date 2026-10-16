@@ -15,7 +15,7 @@ import {
 
 const firebaseConfig = {
   apiKey:"AIzaSyCSnUww6XmaNkdrDEnwpzZIWQHz2SW58sI",
-  authDomain:"kivoraa.firebaseapp.com", projectId:"kivoraa",
+  authDomain:(isAppShell&&typeof window!=="undefined"&&window.location.hostname&&window.location.hostname!=="localhost")?window.location.hostname:"kivoraa.firebaseapp.com", projectId:"kivoraa",
   storageBucket:"kivoraa.firebasestorage.app", messagingSenderId:"739770885881",
   appId:"1:739770885881:web:3a17f6eab7e6c4b0612428", measurementId:"G-1W86Q64XKQ"
 };
@@ -53,34 +53,39 @@ export async function startAnonymousSession(){
   return (await signInAnonymously(auth)).user;
 }
 export async function signInWithGoogle(){
-  // Firebase popup/redirect sign-in does not work inside the Android WebView.
-  // Use the native Google account picker, then hand the credential to the web SDK.
+  // Capacitor Android: use the native Google account chooser. Do not launch
+  // Firebase web popup/redirect from the WebView, because it can strand the
+  // user in Chrome and return to the hosted site instead of the APK.
   if(isNative){
-    const { FirebaseAuthentication } = await import("@capacitor-firebase/authentication");
     let result;
-    try { result = await FirebaseAuthentication.signInWithGoogle({ scopes: YOUTUBE_SCOPES }); }
-    catch(e) {
-      // User closed the picker, or scope consent failed: fall back to plain sign-in so login still works.
-      if(/cancel/i.test(String(e?.message||e?.code||""))) throw Object.assign(new Error("Sign-in cancelled."),{code:"auth/popup-closed-by-user"});
+    try {
+      const { FirebaseAuthentication } = await import("@capacitor-firebase/authentication");
+      // Keep basic authentication separate from optional YouTube scopes. Asking
+      // for YouTube scopes at initial login can trigger a second consent flow.
       result = await FirebaseAuthentication.signInWithGoogle();
+    } catch(e) {
+      if(/cancel|closed|canceled/i.test(String(e?.message||e?.code||""))) {
+        throw Object.assign(new Error("Google sign-in was cancelled."),{code:"auth/popup-closed-by-user"});
+      }
+      // Never fall back to browser OAuth in a native APK: surface the native
+      // configuration error instead of sending users outside the application.
+      throw Object.assign(new Error(`Native Google sign-in failed: ${e?.message || e?.code || "Check Firebase Android configuration."}`), { code: e?.code || "auth/native-sign-in-failed" });
     }
     const idToken = result?.credential?.idToken;
-    if(!idToken) throw Object.assign(new Error("Google sign-in did not return a credential."),{code:"auth/invalid-credential"});
-    const credential = GoogleAuthProvider.credential(idToken, result?.credential?.accessToken);
-    if(result?.credential?.accessToken) sessionStorage.setItem("kivora-youtube-access-token",result.credential.accessToken);
-    return (await signInWithCredential(auth, credential)).user;
+    if(!idToken) throw Object.assign(new Error("Google's native picker returned no ID token. Check the Android OAuth client and google-services.json."),{code:"auth/invalid-credential"});
+    const credential = GoogleAuthProvider.credential(idToken);
+    // With skipNativeAuth enabled, the native plugin returns a Google token and
+    // the Firebase JS SDK owns the app's web-compatible Firebase session.
+    const signedIn = await signInWithCredential(auth, credential);
+    const accessToken = result?.credential?.accessToken;
+    if(accessToken) sessionStorage.setItem("kivora-youtube-access-token",accessToken);
+    return signedIn.user;
   }
-  // Installed app (TWA / standalone PWA): a popup would open outside the app. Use the same-window redirect;
-  // finishGoogleRedirect() completes it when the app reloads.
+  // Installed TWA / standalone PWA: this is not a native APK bridge. Use a
+  // same-window redirect so Chrome's popup does not escape the app shell.
   if(isAppShell){
     await signInWithRedirect(auth,googleProvider); return null;
   }
-  // Do not link an anonymous Firebase user to Google here. If that Google
-  // account already exists, Firebase can return auth/credential-already-in-use
-  // after the account picker, which looks like a failed login to the user.
-  // Signing in directly lets Firebase switch the session to the existing
-  // Google account cleanly. Anonymous watch-first access remains available
-  // before login.
   try {
     const result=await signInWithPopup(auth,googleProvider);
     const credential=GoogleAuthProvider.credentialFromResult(result);
@@ -91,14 +96,13 @@ export async function signInWithGoogle(){
     if(["auth/popup-blocked","auth/operation-not-supported-in-this-environment","auth/cancelled-popup-request"].includes(e?.code)){
       await signInWithRedirect(auth,googleProvider); return null;
     }
-    // If an older/previous linking flow is still encountered, recover by
-    // authenticating the existing Google account rather than failing.
     if(["auth/credential-already-in-use","auth/account-exists-with-different-credential"].includes(e?.code)){
       await signInWithRedirect(auth,googleProvider); return null;
     }
     throw e;
   }
 }
+
 export async function getYouTubeAccessToken(){
   const cached=sessionStorage.getItem("kivora-youtube-access-token");
   if(cached) return cached;
