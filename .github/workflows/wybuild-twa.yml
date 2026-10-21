@@ -1,11 +1,17 @@
-# wybuild-twa-workflow-version: 24
-name: WyBuild TWA
+# wybuild-twa-workflow-version: 37
+# v37: Fix literal \n written into MainActivity.java by capacitor-finalize.py (share-target patch).
+name: WyBuild Capacitor + Gradle (TWA fallback)
+# v34: Capacitor builds apply the project icon (launcher + splash) instead of Capacitor's default.
+# v33: enables the Firebase Google provider (fixes GoogleAuthProviderHandler null crash).
+# v32: Capacitor is also chosen for framework apps (Next.js static export script), keeps google-services.json from config/android, prints signing SHA-1.
+# v31: release signing happens on the WyBuild signing service. This repository only builds; the release key never enters it.
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-run-name: "WyBuild TWA ${{ fromJSON(inputs.twa_config).packageId || 'auto' }}/${{ inputs.output }} on ${{ github.ref_name }}"
+run-name: "WyBuild Android ${{ fromJSON(inputs.twa_config).packageId || 'auto' }}/${{ inputs.output }} on ${{ github.ref_name }}"
 
-# Converts a web app / PWA into an Android Trusted Web Activity with the Bubblewrap toolchain.
+# Primary engine: Capacitor + Android Gradle for source repositories with a buildable web app.
+# URL-only / non-buildable repositories retain the existing Bubblewrap native-shell fallback.
 # GitHub allows at most 25 dispatch inputs, so the full configuration travels as one JSON input.
 on:
   workflow_dispatch:
@@ -37,22 +43,32 @@ on:
         description: One-time build ticket issued by WyBuild. Builds started from the GitHub Actions tab have none and are refused.
         type: string
         default: ""
+      sign_mode:
+        description: remote = WyBuild signs the finished build on its own service (default key). repo = sign here with this repository's own WB_KEYSTORE_* secrets.
+        type: string
+        default: "repo"
 
 jobs:
   twa:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # lets WyBuild's signing service fetch this run's unsigned artifact with the run's own short-lived token
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
     env:
       TWA_CONFIG: ${{ inputs.twa_config }}
       OUTPUT: ${{ inputs.output }}
       USE_KEYSTORE: ${{ inputs.use_keystore }}
       STORE_READY: ${{ inputs.store_ready }}
+      SIGN_MODE: ${{ inputs.sign_mode }}
+      NEXT_PUBLIC_API_BASE_URL: ${{ vars.NEXT_PUBLIC_API_BASE_URL }}
+      NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ vars.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID }}
       WB_OUT: ${{ github.workspace }}/.wybuild-out
       WB_TOOLS: ${{ github.workspace }}/.wybuild-tools
-      WB_KEYSTORE_B64: ${{ secrets.WB_KEYSTORE_BASE64 }}
-      WB_KEYSTORE_PASSWORD: ${{ secrets.WB_KEYSTORE_PASSWORD }}
-      WB_KEY_ALIAS_SECRET: ${{ secrets.WB_KEY_ALIAS }}
-      WB_KEY_PASSWORD: ${{ secrets.WB_KEY_PASSWORD }}
+      WB_KEYSTORE_B64: ${{ inputs.sign_mode != 'remote' && secrets.WB_KEYSTORE_BASE64 || '' }} # never mapped into the job in remote-signing mode
+      WB_KEYSTORE_PASSWORD: ${{ inputs.sign_mode != 'remote' && secrets.WB_KEYSTORE_PASSWORD || '' }} # never mapped into the job in remote-signing mode
+      WB_KEY_ALIAS_SECRET: ${{ inputs.sign_mode != 'remote' && secrets.WB_KEY_ALIAS || '' }} # never mapped into the job in remote-signing mode
+      WB_KEY_PASSWORD: ${{ inputs.sign_mode != 'remote' && secrets.WB_KEY_PASSWORD || '' }} # never mapped into the job in remote-signing mode
     steps:
       - name: Authorize with WyBuild
         # Builds must be started from the WyBuild app: it checks the plan and quota, then hands this run a
@@ -89,9 +105,198 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21" # Capacitor 7 Android plugins compile with Java 21
+
+      - name: Detect and build a local web source (Capacitor primary engine)
+        id: engine
+        run: |
+          set -euo pipefail
+          mkdir -p "$WB_OUT" "$WB_TOOLS"
+          echo "WYBUILD_ENGINE=twa" >> "$GITHUB_ENV"
+          echo "WYBUILD_ENGINE=twa" > "$WB_OUT/engine.txt"
+          # A source build is eligible when package.json has a web build script and produces a usable index.html.
+          # Framework apps with server code (for example Next.js + API routes) cannot ship `next build` output (.next/) in an APK:
+          # they need a STATIC export. Such projects expose a dedicated script, which is preferred over plain `build`:
+          #   wybuild:build > build:capacitor-web > build:static > build
+          BUILD_SCRIPT=""
+          if [ -f package.json ] && node -e "const c=JSON.parse(process.env.TWA_CONFIG||'{}');process.exit(c.shell==='twa'?1:0)"; then
+            BUILD_SCRIPT="$(node -e "const s=(require('./package.json').scripts)||{};console.log(['wybuild:build','build:capacitor-web','build:static','build'].find(n=>s[n])||'')")"
+          fi
+          if [ -n "$BUILD_SCRIPT" ]; then
+            echo "A web build script was found (npm run $BUILD_SCRIPT); checking whether this repository is a buildable web app."
+            # Defaults for static-export scripts: the API lives on the project's own website, and the Google web client id
+            # is the type-3 OAuth client inside google-services.json. Repository variables of the same name win.
+            node - <<'NODEENV' > "$RUNNER_TEMP/wb-env.sh"
+            const fs = require('fs');
+            const cfg = JSON.parse(process.env.TWA_CONFIG || '{}');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            const q = (v) => "'" + String(v).replace(/'/g, "'\\''") + "'";
+            if (pkg.dependencies?.next || pkg.devDependencies?.next) {
+              if (!process.env.NEXT_PUBLIC_API_BASE_URL && cfg.webUrl) { try { console.log('export NEXT_PUBLIC_API_BASE_URL=' + q(new URL(cfg.webUrl).origin)); } catch {} }
+              if (!process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID) {
+                for (const f of ['google-services.json', 'config/android/google-services.json', 'android/app/google-services.json']) {
+                  try {
+                    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+                    const clients = (j.client || []).filter((c) => !cfg.packageId || c.client_info?.android_client_info?.package_name === cfg.packageId);
+                    const web = (clients.length ? clients : j.client || []).flatMap((c) => c.oauth_client || []).find((o) => o.client_type === 3);
+                    if (web?.client_id) { console.log('export NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID=' + q(web.client_id)); break; }
+                  } catch {}
+                }
+              }
+            }
+          NODEENV
+            . "$RUNNER_TEMP/wb-env.sh"
+            if [ -f package-lock.json ]; then npm ci --no-audit --no-fund || npm install --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+            if npm run "$BUILD_SCRIPT"; then
+              WEB_DIR=""
+              for d in dist build www out public; do
+                if [ -f "$d/index.html" ]; then WEB_DIR="$d"; break; fi
+              done
+              if [ -n "$WEB_DIR" ]; then
+                echo "WYBUILD_ENGINE=capacitor" >> "$GITHUB_ENV"
+                echo "WYBUILD_ENGINE=capacitor" > "$WB_OUT/engine.txt"
+                echo "WYBUILD_WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
+                # GITHUB_ENV affects later steps only. Export this value now too because
+                # bridge bundling and Capacitor config happen later in this SAME run step.
+                export WYBUILD_WEB_DIR="$WEB_DIR"
+                echo "Capacitor selected: built web assets found in $WEB_DIR (npm run $BUILD_SCRIPT)."
+              else
+                if node -e "const p=require('./package.json');process.exit((p.dependencies&&p.dependencies.next)||(p.devDependencies&&p.devDependencies.next)?0:1)"; then
+                  echo "::warning::npm run $BUILD_SCRIPT produced no index.html in dist/build/www/out/public, so this Next.js project was packaged as a URL/Bubblewrap app WITHOUT native features (no native Google login). Add a package.json script named build:capacitor-web (or wybuild:build) that does a static export (output: 'export') into out/."
+                else
+                  echo "::notice::The repository build completed but no dist/build/www/out index.html was found; using the URL-based native-shell fallback."
+                fi
+              fi
+            else
+              echo "::error::This repository has a build script (npm run $BUILD_SCRIPT), but it failed. WyBuild will not silently package the live URL instead of your source project. Fix the source build or choose a URL-only project."
+              exit 1
+            fi
+          else
+            echo "No buildable package.json web project found; using the configured live URL with the existing native-shell fallback."
+          fi
+          # Some opt-in features are engine-specific. Stop instead of producing a successful APK
+          # where a selected feature is silently ignored by the other engine.
+          node - <<'NODEFEATURES'
+          const cfg = JSON.parse(process.env.TWA_CONFIG || '{}');
+          const engine = require('fs').readFileSync(process.env.WB_OUT + '/engine.txt', 'utf8').trim().replace(/^WYBUILD_ENGINE=/, '');
+          const selected = new Set(Array.isArray(cfg.nativeFeatures) ? cfg.nativeFeatures : []);
+          if (cfg.shell === 'twa' && selected.size) {
+            console.error('::error::The Trusted Web Activity shell cannot expose WyBuildNative plugin APIs. Clear native app feature selections or switch to the standalone shell.'); process.exit(1);
+          }
+          const capacitorOnly = ['googleauth','push','pulltorefresh','swipeback','shareout','fileaccess','networkstatus','deviceinfo','haptics','deeplinks','localnotifications'];
+          const incompatible = [...selected].filter((f) => capacitorOnly.includes(f));
+          if (engine !== 'capacitor' && incompatible.length) {
+            console.error('::error::Selected feature(s) require a buildable Capacitor source project, but WyBuild detected the URL-based native shell: ' + incompatible.join(', ') + '. The build is stopped rather than silently omitting features. Add a supported package.json web build script that produces a static index.html, or disable the incompatible features.'); process.exit(1);
+          }
+          if (engine !== 'capacitor' && selected.has('googleauth')) {
+            // Kept as documentation for the native-vs-web auth distinction; the guard above
+            // prevents claiming that native GoogleAuth is present in a URL-only build.
+            console.log('::notice::URL-based build selected: use the website OAuth flow for Google sign-in.');
+          }
+          if (engine === 'capacitor' && selected.has('sharetarget')) {
+            console.log('::notice::Capacitor incoming-share support will be added to the Android manifest and WyBuild share bridge.');
+          }
+          NODEFEATURES
+
+      - name: Install Capacitor and native plugin toolchain
+        if: ${{ env.WYBUILD_ENGINE == 'capacitor' }}
+        run: |
+          set -euo pipefail
+          # Capacitor discovers native plugins from package.json. Add the build-only dependencies
+          # to this ephemeral checkout before installing/syncing; --no-save alone leaves plugins
+          # invisible to `cap sync` on some CLI versions.
+          node --input-type=module <<'NODEPKG'
+          import fs from 'node:fs';
+          const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          p.dependencies = { ...(p.dependencies || {}),
+            '@capacitor/core': '^7', '@capacitor/cli': '^7', '@capacitor/android': '^7',
+            '@capacitor/app': '^7', '@capacitor/action-sheet': '^7', '@capacitor/browser': '^7',
+            '@capacitor/camera': '^7', '@capacitor/clipboard': '^7', '@capacitor/device': '^7',
+            '@capacitor/dialog': '^7', '@capacitor/filesystem': '^7', '@capacitor/geolocation': '^7',
+            '@capacitor/haptics': '^7', '@capacitor/keyboard': '^7', '@capacitor/local-notifications': '^7',
+            '@capacitor/network': '^7', '@capacitor/preferences': '^7', '@capacitor/push-notifications': '^7',
+            '@capacitor/screen-orientation': '^7', '@capacitor/share': '^7', '@capacitor/splash-screen': '^7',
+            '@capacitor/status-bar': '^7', '@capacitor-firebase/authentication': '^7',
+            // Firebase web SDK is required by the Capacitor Firebase plugins' web entry points.
+            // Without it esbuild fails to resolve firebase/auth and firebase/messaging.
+            
+            '@capacitor-firebase/messaging': '^7', firebase: '^11.0.0', '@aparajita/capacitor-biometric-auth': '^9', esbuild: '^0.25'
+          };
+          // The project's own older Capacitor packages must not conflict with the Capacitor 7 set above:
+          // drop duplicates from devDependencies and remove the Capacitor 5 Google login plugin (WyBuild uses Firebase Authentication).
+          for (const k of Object.keys(p.dependencies)) { delete p.devDependencies?.[k]; delete p.optionalDependencies?.[k]; }
+          delete p.dependencies['@codetrix-studio/capacitor-google-auth'];
+          fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          NODEPKG
+          npm install --legacy-peer-deps --no-audit --no-fund
+          cp .github/wybuild/capacitor-bridge.entry.js ./wybuild-native-bridge.entry.js
+          npx esbuild ./wybuild-native-bridge.entry.js --bundle --format=esm --target=es2020 --outfile="$WYBUILD_WEB_DIR/wybuild-native-bridge.js"
+          python3 - <<'PYHTML'
+          import os
+          from pathlib import Path
+          import re
+          p=Path(os.environ['WYBUILD_WEB_DIR'])/'index.html'
+          s=p.read_text(encoding='utf-8')
+          tag='<script type="module" src="./wybuild-native-bridge.js"></script>'
+          if 'wybuild-native-bridge.js' not in s:
+              head=re.search(r'<head\b[^>]*>', s, flags=re.I)
+              if head: s=s[:head.end()]+'\n'+tag+'\n'+s[head.end():]
+              elif re.search(r'</body>', s, flags=re.I): s=re.sub(r'</body>', lambda m: tag+'\n'+m.group(0), s, count=1, flags=re.I)
+              else: s += '\n'+tag+'\n'
+              p.write_text(s, encoding='utf-8')
+          PYHTML
+          node - <<'NODE'
+          const fs = require('fs');
+          const cfg = JSON.parse(process.env.TWA_CONFIG || '{}');
+          const host = new URL(cfg.webUrl).hostname.toLowerCase().replace(/^www\./,'').replace(/[^a-z0-9]+/g,'.').replace(/^\.|\.$/g,'');
+          const packageId = cfg.packageId || ('app.wybuild.' + host.replace(/\./g,'').slice(0,30));
+          const appId = packageId.match(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/) ? packageId : 'app.wybuild.generated';
+          const run = Number(process.env.GITHUB_RUN_NUMBER || 1);
+          const versionCode = Number(cfg.versionCode || run);
+          const version = String(cfg.versionName || '1.0.' + run).replace(/[^0-9A-Za-z._+-]/g,'').slice(0,30) || '1.0.0';
+          const webDir = process.env.WYBUILD_WEB_DIR;
+          fs.writeFileSync('capacitor.config.json', JSON.stringify({ appId, appName: String(cfg.name || cfg.launcherName || new URL(cfg.webUrl).hostname).slice(0,50), webDir, backgroundColor: cfg.backgroundColor || '#ffffff', server: { androidScheme: 'https' }, android: { allowMixedContent: false, captureInput: true, webContentsDebuggingEnabled: false }, plugins: { FirebaseAuthentication: { providers: ['google.com'] }, SplashScreen: { launchShowDuration: 500, backgroundColor: cfg.backgroundColor || '#ffffff', showSpinner: false }, StatusBar: { backgroundColor: cfg.themeColor || '#0f172a' } } }, null, 2));
+          fs.mkdirSync('.wybuild-out', {recursive:true});
+          fs.writeFileSync('.wybuild-out/capacitor-meta.json', JSON.stringify({packageId:appId, versionName:version, versionCode, webDir}, null, 2));
+          console.log(`Capacitor app: ${appId} ${version} (${versionCode}); webDir=${webDir}`);
+          NODE
+          if [ -f android/capacitor.settings.gradle ]; then npx cap sync android; else if [ -d android ]; then mv android "$WB_OUT/original-android"; fi; npx cap add android; fi
+          npx cap sync android
+          # Optional project hook: wybuild/capacitor-patch.sh runs from the repository root after sync, so a project can add
+          # its own native code (custom Capacitor plugin, foreground service, manifest entries). It gets WB_ANDROID_DIR and WB_APP_ID.
+          if [ -f wybuild/capacitor-patch.sh ]; then
+            echo "Running wybuild/capacitor-patch.sh"
+            WB_ANDROID_DIR="$GITHUB_WORKSPACE/android" WB_APP_ID="$(node -p 'require("./.wybuild-out/capacitor-meta.json").packageId')" bash wybuild/capacitor-patch.sh
+          fi
+          # Fail with a clear diagnostic instead of producing an APK that opens to a blank screen
+          # when the local web payload or injected bridge was not copied into Android assets.
+          node --input-type=module <<'NODECHECK'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const webDir = process.env.WYBUILD_WEB_DIR;
+          if (!webDir || !fs.existsSync(path.join(webDir, 'index.html'))) {
+            throw new Error(`Capacitor web payload is missing (WYBUILD_WEB_DIR=${webDir || '<empty>'}).`);
+          }
+          if (!fs.existsSync(path.join(webDir, 'wybuild-native-bridge.js'))) {
+            throw new Error('WyBuild native bridge bundle is missing from the built web directory.');
+          }
+          const packaged = path.join('android', 'app', 'src', 'main', 'assets', 'public');
+          if (!fs.existsSync(path.join(packaged, 'index.html'))) {
+            throw new Error(`Capacitor did not copy index.html into ${packaged}.`);
+          }
+          if (!fs.existsSync(path.join(packaged, 'wybuild-native-bridge.js'))) {
+            throw new Error(`Capacitor did not copy wybuild-native-bridge.js into ${packaged}.`);
+          }
+          console.log(`Verified local web payload and native bridge in ${packaged}.`);
+          NODECHECK
+          echo "WYBUILD_PACKAGE=$(node -p 'require("./.wybuild-out/capacitor-meta.json").packageId')" >> "$GITHUB_ENV"
+          echo "WYBUILD_VERSION=$(node -p 'require("./.wybuild-out/capacitor-meta.json").versionName')" >> "$GITHUB_ENV"
+          echo "WYBUILD_VERSION_CODE=$(node -p 'require("./.wybuild-out/capacitor-meta.json").versionCode')" >> "$GITHUB_ENV"
+          echo "WYBUILD_SOURCE_HOST=$(node -p 'new URL(JSON.parse(process.env.TWA_CONFIG).webUrl).hostname')" >> "$GITHUB_ENV"
+          echo "Capacitor Android project created and native plugins synchronized."
 
       - name: Install Bubblewrap CLI
+        if: ${{ env.WYBUILD_ENGINE != 'capacitor' }}
         run: |
           set -euo pipefail
           mkdir -p "$WB_TOOLS" "$WB_OUT"
@@ -107,7 +312,7 @@ jobs:
           }
           JSON
           npm install --no-audit --no-fund --package-lock=false "@bubblewrap/cli@${{ inputs.bubblewrap_version }}"
-          for f in twa-prepare.mjs twa-generate.mjs twa-verify.sh twa-native.py WyBuildActivity.java WyBuildReminderReceiver.java; do
+          for f in twa-prepare.mjs twa-generate.mjs twa-verify.sh twa-native.py WyBuildActivity.java WyBuildReminderReceiver.java capacitor-bridge.entry.js capacitor-finalize.py; do
             test -f "$GITHUB_WORKSPACE/.github/wybuild/$f" || { echo "::error::.github/wybuild/$f is missing in this repo/branch. Reinstall the WyBuild TWA workflow (WyBuild > Web to Android > Update workflow) so all the WyBuild files are committed."; exit 1; }
           done
           cp "$GITHUB_WORKSPACE/.github/wybuild/twa-generate.mjs" .
@@ -116,6 +321,7 @@ jobs:
           # The next step explicitly configures the runner's JDK and Android SDK, so no probe is needed here.
 
       - name: Configure Android SDK and Bubblewrap (non-interactive)
+        if: ${{ env.WYBUILD_ENGINE != 'capacitor' }}
         run: |
           set -euo pipefail
           RUNNER_SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
@@ -158,7 +364,14 @@ jobs:
         run: |
           set -euo pipefail
           KS="$WB_OUT/wybuild-release.jks"
-          if [ "$USE_KEYSTORE" = "true" ]; then
+          if [ "$SIGN_MODE" = "remote" ]; then
+            # The release key is NOT in this repository. The build is signed with a throw-away key that exists only on this
+            # runner; WyBuild's signing service strips that signature and signs the finished build with the release key.
+            echo "::notice::Release signing is done by WyBuild after this build. The release key never enters this repository."
+            ALIAS="wybuild-temp"; SPASS="$(openssl rand -hex 12)"; KPASS="$SPASS"
+            keytool -genkeypair -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 10000 -keystore "$KS" \
+              -storepass "$SPASS" -keypass "$KPASS" -dname "CN=WyBuild Build Key, O=WyBuild, C=US" >/dev/null
+          elif [ "$USE_KEYSTORE" = "true" ]; then
             test -n "$WB_KEYSTORE_B64" || { echo "::error::WB_KEYSTORE_BASE64 secret is missing. Upload your release keystore in WyBuild > Keystores. A release key is required for APKMirror/Uptodown."; exit 1; }
             # Normalize whitespace introduced by multiline GitHub secrets, then decode strictly.
             # Do not print the secret or its contents.
@@ -204,17 +417,20 @@ jobs:
           { echo "WB_KEYSTORE_PATH=$KS"; echo "WB_KEY_ALIAS=$ALIAS"; echo "BUBBLEWRAP_KEYSTORE_PASSWORD=$SPASS"; echo "BUBBLEWRAP_KEY_PASSWORD=$KPASS"; } >> "$GITHUB_ENV"
 
       - name: Resolve configuration (auto-detect from the site's Web App Manifest)
+        if: ${{ env.WYBUILD_ENGINE != 'capacitor' }}
         run: |
           node .github/wybuild/twa-prepare.mjs | tee "$WB_OUT/prepare.log"
           grep -E "^WYBUILD_(PACKAGE|VERSION|VERSION_CODE|WEB_MANIFEST|SNAPSHOT|SOURCE_HOST|SHELL)=" "$WB_OUT/prepare.log" >> "$GITHUB_ENV"
 
       - name: Generate Android project
+        if: ${{ env.WYBUILD_ENGINE != 'capacitor' }}
         run: |
           set -euo pipefail
           cd "$WB_TOOLS"
           node twa-generate.mjs
 
       - name: Apply manual Android features
+        if: ${{ env.WYBUILD_ENGINE != 'capacitor' }}
         run: |
           set -euo pipefail
           P="$WB_OUT/project"
@@ -230,7 +446,128 @@ jobs:
             echo "Running wybuild/twa-patch.sh"; (cd "$P" && bash "$GITHUB_WORKSPACE/wybuild/twa-patch.sh")
           fi
 
-      - name: Build signed APK / AAB (Bubblewrap CLI + Gradle; standalone shell or TWA per settings)
+      - name: Apply the app icon (Capacitor)
+        if: ${{ env.WYBUILD_ENGINE == 'capacitor' }}
+        run: |
+          set -euo pipefail
+          # `cap add android` ships Capacitor's default icon and splash logo. Replace them with the icon from the project's web manifest.
+          mkdir -p "$WB_TOOLS/icon"
+          (cd "$WB_TOOLS/icon" && { [ -f package.json ] || echo '{"name":"wybuild-icon","private":true}' > package.json; } && npm install --no-audit --no-fund --package-lock=false sharp@0.33.5) || echo "::warning::Could not install the image tool; Capacitor's default icon stays."
+          if [ -d "$WB_TOOLS/icon/node_modules/sharp" ]; then
+          node - <<'NODEICON'
+          // Applies the project's own icon to the generated Capacitor Android project (replaces Capacitor's default launcher icon and splash logo).
+          const fs = require('fs');
+          const path = require('path');
+          const sharp = require(path.join(process.env.WB_TOOLS, 'icon', 'node_modules', 'sharp'));
+          const cfg = JSON.parse(process.env.TWA_CONFIG || '{}');
+          const res = path.join('android', 'app', 'src', 'main', 'res');
+          const get = async (u) => {
+            if (!u) return null;
+            try { const r = await fetch(u, { redirect: 'follow' }); if (!r.ok) throw new Error('HTTP ' + r.status); return Buffer.from(await r.arrayBuffer()); }
+            catch (e) { console.log('::warning::Could not download the app icon ' + u + ': ' + e.message); return null; }
+          };
+          (async () => {
+            const any = await get(cfg.iconUrl);
+            const mask = await get(cfg.maskableIconUrl);
+            const width = async (b) => (b ? (await sharp(b).metadata()).width || 0 : 0);
+            const [wAny, wMask] = [await width(any), await width(mask)];
+            if (!any && !mask) { console.log('::warning::No app icon could be downloaded (iconUrl/maskableIconUrl), so Capacitor\'s default icon stays.'); return; }
+            // Largest available image is the adaptive-icon source; the regular icon is used for pre-Android-8 launchers.
+            const fgSrc = wMask >= wAny ? (mask || any) : any;
+            const legacySrc = any || mask;
+            // A full-bleed (opaque-corner) icon becomes the foreground on its own background colour; a transparent one gets more padding.
+            const { data } = await sharp(fgSrc).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+            const opaque = data[3] > 200;
+            const hex = (n) => n.toString(16).padStart(2, '0');
+            const bg = opaque ? '#' + hex(data[0]) + hex(data[1]) + hex(data[2]) : (/^#[0-9a-fA-F]{6}$/.test(cfg.backgroundColor || '') ? cfg.backgroundColor : '#ffffff');
+            const fgScale = opaque ? 0.8 : 0.62;
+            const dens = { mdpi: [48, 108], hdpi: [72, 162], xhdpi: [96, 216], xxhdpi: [144, 324], xxxhdpi: [192, 432] };
+            // Remove Capacitor's default launcher images (a leftover .webp next to our .png would be a duplicate resource).
+            for (const d of fs.existsSync(res) ? fs.readdirSync(res) : []) {
+              if (!d.startsWith('mipmap-')) continue;
+              for (const f of fs.readdirSync(path.join(res, d))) if (/^ic_launcher.*\.(png|webp)$/.test(f)) fs.rmSync(path.join(res, d, f));
+            }
+            for (const [d, [legacy, fg]] of Object.entries(dens)) {
+              const dir = path.join(res, 'mipmap-' + d); fs.mkdirSync(dir, { recursive: true });
+              const square = await sharp(legacySrc).resize(legacy, legacy, { fit: 'cover' }).png().toBuffer();
+              fs.writeFileSync(path.join(dir, 'ic_launcher.png'), square);
+              const circle = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="' + legacy + '" height="' + legacy + '"><circle cx="' + legacy / 2 + '" cy="' + legacy / 2 + '" r="' + legacy / 2 + '"/></svg>');
+              fs.writeFileSync(path.join(dir, 'ic_launcher_round.png'), await sharp(square).composite([{ input: circle, blend: 'dest-in' }]).png().toBuffer());
+              const inner = Math.round(fg * fgScale);
+              const layer = await sharp({ create: { width: fg, height: fg, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+                .composite([{ input: await sharp(fgSrc).resize(inner, inner, { fit: 'cover' }).png().toBuffer(), gravity: 'center' }]).png().toBuffer();
+              fs.writeFileSync(path.join(dir, 'wybuild_icon_fg.png'), layer);
+            }
+            const adaptive = '<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@color/wybuild_icon_bg"/>\n    <foreground android:drawable="@mipmap/wybuild_icon_fg"/>\n</adaptive-icon>\n';
+            fs.mkdirSync(path.join(res, 'mipmap-anydpi-v26'), { recursive: true });
+            fs.writeFileSync(path.join(res, 'mipmap-anydpi-v26', 'ic_launcher.xml'), adaptive);
+            fs.writeFileSync(path.join(res, 'mipmap-anydpi-v26', 'ic_launcher_round.xml'), adaptive);
+            fs.mkdirSync(path.join(res, 'values'), { recursive: true });
+            fs.writeFileSync(path.join(res, 'values', 'wybuild_icon.xml'), '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="wybuild_icon_bg">' + bg + '</color>\n</resources>\n');
+            // Capacitor's default splash image also carries its logo: replace it with the app background and icon.
+            for (const d of fs.readdirSync(res)) {
+              const file = path.join(res, d, 'splash.png');
+              if (!d.startsWith('drawable') || !fs.existsSync(file)) continue;
+              const m = await sharp(file).metadata(); const w = m.width || 480, h = m.height || 320; const s = Math.round(Math.min(w, h) * 0.3);
+              const logo = await sharp(legacySrc).resize(s, s, { fit: 'cover' }).png().toBuffer();
+              fs.writeFileSync(file, await sharp({ create: { width: w, height: h, channels: 4, background: bg } }).composite([{ input: logo, gravity: 'center' }]).png().toBuffer());
+            }
+            console.log('Applied app icon (background ' + bg + ', ' + (opaque ? 'full-bleed' : 'transparent') + ' source, ' + Math.max(wAny, wMask) + 'px).');
+          })().catch((e) => { console.log('::warning::Could not apply the app icon (' + e.message + '); Capacitor\'s default icon stays.'); });
+          NODEICON
+          fi
+
+      - name: Finalize Capacitor native permissions and release signing
+        if: ${{ env.WYBUILD_ENGINE == 'capacitor' }}
+        env:
+          CI: "true"
+        run: |
+          set -euo pipefail
+          python3 .github/wybuild/capacitor-finalize.py "$GITHUB_WORKSPACE/android"
+          chmod +x android/gradlew
+          cd android
+          ./gradlew --no-daemon --stacktrace assembleRelease bundleRelease
+          DIST="$WB_OUT/dist"; mkdir -p "$DIST"
+          META="$GITHUB_WORKSPACE/.wybuild-out/capacitor-meta.json"
+          NAME="$(node -p "const m=require('../.wybuild-out/capacitor-meta.json');m.packageId+'_'+m.versionName+'_'+m.versionCode")"
+          APK="app/build/outputs/apk/release/app-release.apk"
+          AAB="app/build/outputs/bundle/release/app-release.aab"
+          NEED_APK=false; NEED_AAB=false
+          case "$OUTPUT" in apk|both) NEED_APK=true ;; esac
+          case "$OUTPUT" in aab|both) NEED_AAB=true ;; esac
+          if [ "$NEED_APK" = true ]; then test -f "$APK" || { echo "::error::Capacitor Gradle did not produce a release APK."; exit 1; }; cp "$APK" "$DIST/$NAME.apk"; fi
+          if [ "$NEED_AAB" = true ]; then test -f "$AAB" || { echo "::error::Capacitor Gradle did not produce a release AAB."; exit 1; }; cp "$AAB" "$DIST/$NAME.aab"; fi
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -n "$BT" ] && [ -f "$DIST/$NAME.apk" ]; then "$BT/apksigner" verify --verbose "$DIST/$NAME.apk"; fi
+          if [ -f "$DIST/$NAME.aab" ]; then jarsigner -verify -verbose -certs "$DIST/$NAME.aab" >/dev/null; fi
+          cp "$META" "$DIST/capacitor-config.json"
+          if [ "$SIGN_MODE" != "remote" ]; then
+            KT_OUT="$(keytool -list -v -keystore "$WB_KEYSTORE_PATH" -alias "$WB_KEY_ALIAS" -storepass "$BUBBLEWRAP_KEYSTORE_PASSWORD" 2>&1 || true)"
+            SHA1="$(printf '%s\n' "$KT_OUT" | sed -n 's/^[[:space:]]*SHA1:[[:space:]]*//p' | head -1 | tr -d '\r')"
+            SHA256="$(printf '%s\n' "$KT_OUT" | sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | head -1 | tr -d '\r')"
+            echo "## Signing certificate (add to Firebase for native Google login)" >> "$GITHUB_STEP_SUMMARY"
+            echo "- SHA-1: \`$SHA1\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- SHA-256: \`$SHA256\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::Signing certificate SHA-1 for Firebase: $SHA1"
+          else
+            echo "::notice::Native Google login: register the SHA-1 of WyBuild's release signing key (and Google Play's app-signing SHA-1 for Play installs) in the Firebase Android app."
+          fi
+          if [ "$SIGN_MODE" = "remote" ]; then SIGN_LINE="Signing: built with a throw-away key; WyBuild's signing service replaces it with the release key and verifies v1/v2/v3 signatures."; else SIGN_LINE="Signing: release keystore validated by WyBuild; APK/AAB signature verification passed."; fi
+          cat > "$DIST/store-readiness.md" <<EOF
+          # WyBuild Capacitor release
+          - Engine: Capacitor + Android Gradle
+          - Package: $(node -p 'require("../.wybuild-out/capacitor-meta.json").packageId')
+          - Version: $(node -p 'require("../.wybuild-out/capacitor-meta.json").versionName')
+          - Version code: $(node -p 'require("../.wybuild-out/capacitor-meta.json").versionCode')
+          - $SIGN_LINE
+          - Native bridge: camera, location, notifications, push, Firebase Google/Apple auth, biometrics, filesystem, sharing, clipboard, haptics, device/network, orientation, status bar, keyboard and dialogs are bundled.
+          - Setup-dependent: Google/Firebase login and remote push require a matching google-services.json, Firebase providers, SHA fingerprints and server-side auth configuration.
+          EOF
+          echo "## WyBuild Capacitor build" >> "$GITHUB_STEP_SUMMARY"
+          cat "$DIST/store-readiness.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build signed APK / AAB (Bubblewrap fallback)
+        if: ${{ env.WYBUILD_ENGINE != 'capacitor' }}
         env:
           CI: "true"
           BUBBLEWRAP_NO_PROMPT: "1"
@@ -280,7 +617,8 @@ jobs:
           case "$OUTPUT" in aab|both) cp app-release-bundle.aab "$WB_OUT/verify.aab" ;; esac
           ls -la "$DIST"
 
-      - name: Digital Asset Links and store-readiness checks
+      - name: Digital Asset Links and store-readiness checks (Bubblewrap fallback)
+        if: ${{ env.WYBUILD_ENGINE != 'capacitor' }}
         run: |
           set -euo pipefail
           DIST="$WB_OUT/dist"
@@ -323,7 +661,7 @@ jobs:
           exit $RC
 
       - name: Check the live site trusts this app (only the Trusted Web Activity shell needs this to hide the address bar)
-        if: ${{ env.WYBUILD_SHELL == 'twa' }}
+        if: ${{ env.WYBUILD_ENGINE != 'capacitor' && env.WYBUILD_SHELL == 'twa' && env.SIGN_MODE != 'remote' }}
         continue-on-error: true
         run: |
           python3 - <<'PY'
@@ -365,10 +703,71 @@ jobs:
           PY
 
       - name: Upload artifacts
-        if: ${{ always() }}
+        if: ${{ always() && env.SIGN_MODE != 'remote' }}
         uses: actions/upload-artifact@v5
         with:
           name: wb-twa-${{ github.run_id }}
           path: .wybuild-out/dist/**
           include-hidden-files: true
           if-no-files-found: warn
+
+      # Remote signing: the build output is uploaded as an UNSIGNED hand-off (signed only with the runner's throw-away key).
+      - name: Upload unsigned build for WyBuild signing
+        id: unsigned
+        if: ${{ always() && env.SIGN_MODE == 'remote' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: wb-unsigned-${{ github.run_id }}
+          path: .wybuild-out/dist/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: Sign with WyBuild (the release key stays outside this repository)
+        if: ${{ success() && env.SIGN_MODE == 'remote' }}
+        env:
+          WB_APP_URL: "https://wybuild-black.vercel.app"
+          WB_TICKET: ${{ inputs.wb_ticket }}
+          WB_RUN_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          case "$WB_APP_URL" in
+            https://*) ;;
+            *) echo "::error::This workflow was not installed by WyBuild (missing app URL). Open WyBuild > Web to Android > Update workflow."; exit 1 ;;
+          esac
+          echo "::add-mask::$WB_RUN_TOKEN"
+          call() { # $1 = endpoint, $2 = json file; prints the HTTP status
+            curl -sS --retry 3 --retry-delay 3 --retry-all-errors -m 60 -o "$RUNNER_TEMP/wb-sign-resp.json" -w '%{http_code}' \
+              -H 'Content-Type: application/json' --data @"$2" "${WB_APP_URL%/}/api/build/$1" || echo 000
+          }
+          jq -n --arg t "$WB_TICKET" --arg repo "$GITHUB_REPOSITORY" --arg run "$GITHUB_RUN_ID" --arg att "$GITHUB_RUN_ATTEMPT" --arg tok "$WB_RUN_TOKEN" \
+            '{ticket:$t, repo:$repo, runId:$run, runAttempt:$att, token:$tok}' > "$RUNNER_TEMP/wb-complete.json"
+          CODE="$(call complete "$RUNNER_TEMP/wb-complete.json")"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::WyBuild could not start signing (HTTP $CODE). $(jq -r '.error // empty' "$RUNNER_TEMP/wb-sign-resp.json" 2>/dev/null || true)"
+            exit 1
+          fi
+          echo "Build handed to WyBuild for signing. Waiting for the signed APK/AAB..."
+          jq -n --arg t "$WB_TICKET" --arg repo "$GITHUB_REPOSITORY" --arg run "$GITHUB_RUN_ID" '{ticket:$t, repo:$repo, runId:$run}' > "$RUNNER_TEMP/wb-status.json"
+          for i in $(seq 1 120); do
+            sleep 10
+            CODE="$(call sign-status "$RUNNER_TEMP/wb-status.json")"
+            if [ "$CODE" = "200" ]; then
+              STATE="$(jq -r '.state // empty' "$RUNNER_TEMP/wb-sign-resp.json")"
+              case "$STATE" in
+                signed)
+                  FP="$(jq -r '.fingerprint // empty' "$RUNNER_TEMP/wb-sign-resp.json")"
+                  echo "WyBuild signed this build and verified the signatures."
+                  { echo "## Signed by WyBuild"; echo "- Signatures: APK v1 + v2 + v3, App Bundle jarsigner; verified against the release certificate"; [ -n "$FP" ] && echo "- Certificate SHA-256: \`$FP\`"; echo "- Download the signed files from the WyBuild Builds page."; } >> "$GITHUB_STEP_SUMMARY"
+                  exit 0 ;;
+                failed)
+                  echo "::error::WyBuild could not sign this build: $(jq -r '.error // "unknown reason"' "$RUNNER_TEMP/wb-sign-resp.json")"
+                  exit 1 ;;
+              esac
+            elif [ "$CODE" = "403" ] || [ "$CODE" = "400" ]; then
+              echo "::error::WyBuild stopped the signing request (HTTP $CODE). $(jq -r '.error // empty' "$RUNNER_TEMP/wb-sign-resp.json" 2>/dev/null || true)"
+              exit 1
+            fi
+          done
+          echo "::error::Timed out after 20 minutes waiting for WyBuild to sign this build. Start a new build from WyBuild."
+          exit 1
