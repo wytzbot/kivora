@@ -604,6 +604,12 @@ public class WyBuildActivity extends Activity {
             shown = true;
             pageUrl = url == null ? "" : url;
             CookieManager.getInstance().flush();
+
+            // Improve vertical/horizontal scrolling in the standalone native WebView without
+            // cancelling touch events or changing page-specific gesture handlers.
+            try {
+                view.evaluateJavascript("(function(){try{if(document.getElementById('wybuild-scroll-quality'))return;var s=document.createElement('style');s.id='wybuild-scroll-quality';s.textContent='html{scroll-behavior:smooth;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}body{-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}[data-scroll-x],.wy-scroll-x{overflow-x:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;touch-action:pan-x pan-y;scrollbar-width:thin}[data-scroll-y],.wy-scroll-y{overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain;touch-action:pan-y;scrollbar-width:thin}pre,table{max-width:100%}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{scroll-behavior:auto!important}}';(document.head||document.documentElement).appendChild(s)}catch(e){}})();", null);
+            } catch (Exception ignored) { /* scroll polish is non-critical */ }
             deliverPendingShare();
         }
 
